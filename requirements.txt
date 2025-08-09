@@ -1,6 +1,0 @@
-<<<<<<< HEAD
-python-telegram-bot==20.7
-=======
-python-telegram-bot==20.8
->>>>>>> 6e233e2 (Deploy: Render Worker (start.py) + enhanced_bot + DB_PATH + render.yaml)
-python-dotenv==1.0.0
