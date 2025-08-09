@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: ref-contest-bot
+    env: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+<<<<<<< HEAD
+    startCommand: "python enhanced_bot.py"
+=======
+    startCommand: "python start.py"
+>>>>>>> 6e233e2 (Deploy: Render Worker (start.py) + enhanced_bot + DB_PATH + render.yaml)
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: DB_PATH
+        value: /data/contest.db
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
