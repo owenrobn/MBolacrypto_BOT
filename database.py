@@ -112,13 +112,24 @@ class Database:
                 )
             ''')
 
-            # Warnings per chat/user (Phase 2)
+            # Warnings table for moderation
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS warnings (
                     chat_id INTEGER,
                     user_id INTEGER,
                     count INTEGER DEFAULT 0,
                     last_reason TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (chat_id, user_id)
+                )
+            ''')
+
+            # Track repeated threshold violations (strikes). Strike increments when user hits threshold.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_violations (
+                    chat_id INTEGER,
+                    user_id INTEGER,
+                    strikes INTEGER DEFAULT 0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (chat_id, user_id)
                 )
@@ -545,6 +556,26 @@ class Database:
             cursor.execute('SELECT count FROM warnings WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
             row = cursor.fetchone()
             return int(row[0]) if row else 0
+
+    def get_strikes(self, chat_id: int, user_id: int) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT strikes FROM user_violations WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
+            row = cursor.fetchone()
+            return int(row[0]) if row else 0
+
+    def add_strike(self, chat_id: int, user_id: int) -> int:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO user_violations (chat_id, user_id, strikes, updated_at)
+                VALUES (?, ?, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(chat_id, user_id) DO UPDATE SET strikes = user_violations.strikes + 1, updated_at = CURRENT_TIMESTAMP
+            ''', (chat_id, user_id))
+            conn.commit()
+            cursor.execute('SELECT strikes FROM user_violations WHERE chat_id = ? AND user_id = ?', (chat_id, user_id))
+            row = cursor.fetchone()
+            return int(row[0]) if row else 1
 
     def record_activity(self, chat_id: int, user_id: int) -> None:
         with sqlite3.connect(self.db_path) as conn:
