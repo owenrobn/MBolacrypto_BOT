@@ -81,7 +81,17 @@ class Database:
                     FOREIGN KEY (event_id) REFERENCES events (id)
                 )
             ''')
-            
+
+            # User preferences table (Phase 1: broadcast opt-in)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_prefs (
+                    user_id INTEGER PRIMARY KEY,
+                    opted_in INTEGER DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id)
+                )
+            ''')
+
             conn.commit()
     
     def add_user(self, user_id: int, username: str = None, first_name: str = None, 
@@ -340,3 +350,33 @@ class Database:
                 'referral_count': referral_count,
                 'referred_users': referred_users
             }
+
+    # ====== Preferences (Opt-in) ======
+    def set_opt_in(self, user_id: int, opted_in: bool) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Ensure user exists in users table minimally
+            cursor.execute('''
+                INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, referral_code)
+                VALUES (?, NULL, NULL, NULL, ?)
+            ''', (user_id, str(uuid.uuid4())[:8].upper()))
+
+            cursor.execute('''
+                INSERT INTO user_prefs (user_id, opted_in, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET opted_in=excluded.opted_in, updated_at=CURRENT_TIMESTAMP
+            ''', (user_id, 1 if opted_in else 0))
+            conn.commit()
+
+    def is_opted_in(self, user_id: int) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT opted_in FROM user_prefs WHERE user_id = ?', (user_id,))
+            row = cursor.fetchone()
+            return bool(row[0]) if row else False
+
+    def get_opted_in_users(self) -> List[int]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id FROM user_prefs WHERE opted_in = 1')
+            return [r[0] for r in cursor.fetchall()]
