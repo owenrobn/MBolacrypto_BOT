@@ -1075,6 +1075,9 @@ class MultipurposeBot:
                         except Exception as e:
                             logger.warning(f"auto mute failed: {e}")
 
+        except Exception as e:
+            logger.error(f"group_message_handler error: {e}")
+
     async def setautoban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type not in ['group', 'supergroup']:
             await update.message.reply_text("Use this in a group.")
@@ -1114,8 +1117,6 @@ class MultipurposeBot:
             return
         db.set_group_setting(chat_id, 'strikes_reset_on_mute', 1 if val=='on' else 0)
         await update.message.reply_text(f"✅ Reset warnings after mute set to {'ON' if val=='on' else 'OFF'}.")
-        except Exception as e:
-            logger.error(f"group_message_handler error: {e}")
 
     # ===== Group Config Inline UI =====
     def _render_group_config_kb(self, gs: Dict) -> InlineKeyboardMarkup:
