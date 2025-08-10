@@ -108,10 +108,23 @@ class Database:
                     anti_links INTEGER DEFAULT 0,
                     warn_threshold INTEGER DEFAULT 3,
                     mute_minutes_default INTEGER DEFAULT 10,
+                    auto_ban_on_repeat INTEGER DEFAULT 1,
+                    strikes_reset_on_mute INTEGER DEFAULT 1,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
+            # Migration: ensure new columns exist
+            try:
+                cursor.execute("PRAGMA table_info(group_settings)")
+                gcols = [row[1] for row in cursor.fetchall()]
+                if 'auto_ban_on_repeat' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN auto_ban_on_repeat INTEGER DEFAULT 1")
+                if 'strikes_reset_on_mute' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN strikes_reset_on_mute INTEGER DEFAULT 1")
+            except Exception:
+                pass
+            
             # Warnings table for moderation
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS warnings (
@@ -499,25 +512,27 @@ class Database:
     def get_group_settings(self, chat_id: int):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT chat_id, anti_links, warn_threshold, mute_minutes_default FROM group_settings WHERE chat_id = ?', (chat_id,))
+            cursor.execute('SELECT chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute FROM group_settings WHERE chat_id = ?', (chat_id,))
             row = cursor.fetchone()
             if not row:
                 # Initialize defaults
                 cursor.execute('''
-                    INSERT OR IGNORE INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, updated_at)
-                    VALUES (?, 0, 3, 10, CURRENT_TIMESTAMP)
+                    INSERT OR IGNORE INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute, updated_at)
+                    VALUES (?, 0, 3, 10, 1, 1, CURRENT_TIMESTAMP)
                 ''', (chat_id,))
                 conn.commit()
-                return {"chat_id": chat_id, "anti_links": 0, "warn_threshold": 3, "mute_minutes_default": 10}
+                return {"chat_id": chat_id, "anti_links": 0, "warn_threshold": 3, "mute_minutes_default": 10, "auto_ban_on_repeat": 1, "strikes_reset_on_mute": 1}
             return {
                 "chat_id": row[0],
                 "anti_links": int(row[1]),
                 "warn_threshold": int(row[2]),
                 "mute_minutes_default": int(row[3]),
+                "auto_ban_on_repeat": int(row[4]) if row[4] is not None else 1,
+                "strikes_reset_on_mute": int(row[5]) if row[5] is not None else 1,
             }
 
     def set_group_setting(self, chat_id: int, key: str, value) -> None:
-        if key not in {"anti_links", "warn_threshold", "mute_minutes_default"}:
+        if key not in {"anti_links", "warn_threshold", "mute_minutes_default", "auto_ban_on_repeat", "strikes_reset_on_mute"}:
             raise ValueError("Invalid group setting key")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -525,9 +540,9 @@ class Database:
             if cursor.rowcount == 0:
                 # ensure row exists
                 cursor.execute('''
-                    INSERT INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, updated_at)
-                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ''', (chat_id, 0, 3, 10))
+                    INSERT INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (chat_id, 0, 3, 10, 1, 1))
                 cursor.execute(f'''UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?''', (value, chat_id))
             conn.commit()
 
