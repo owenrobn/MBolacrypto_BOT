@@ -376,6 +376,12 @@ class EnhancedRefContestBot:
             img.save(out, format="WEBP")
             out.seek(0)
             await context.bot.send_sticker(chat_id=chat.id, sticker=out)
+        except Exception as e:
+            logger.error(f"Error converting photo to sticker: {e}")
+            try:
+                await update.effective_chat.send_message("Sorry, I couldn't convert that image to a sticker.")
+            except Exception:
+                pass
 
     # ====== Admin: Broadcasts ======
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
