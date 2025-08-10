@@ -108,6 +108,15 @@ class MultipurposeBot:
 
         port = os.getenv("PORT")
         webhook_url = os.getenv("WEBHOOK_URL")
+        # Auto-detect Render external URL if WEBHOOK_URL isn't provided
+        if not webhook_url:
+            render_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME")
+            if render_url:
+                # Ensure it has https scheme
+                if not render_url.startswith("http://") and not render_url.startswith("https://"):
+                    render_url = f"https://{render_url}"
+                # Strip trailing slash to avoid double slashes
+                webhook_url = render_url.rstrip('/')
         if port and webhook_url:
             logger.info(f"Starting in WEBHOOK mode on port {port}, url: {webhook_url}")
             application.run_webhook(
@@ -117,7 +126,7 @@ class MultipurposeBot:
                 drop_pending_updates=True,
             )
         else:
-            logger.info("Starting in POLLING mode")
+            logger.info("Starting in POLLING mode (PORT or WEBHOOK_URL missing)")
             application.run_polling()
 
     # ========== Menus ==========
