@@ -1,5 +1,9 @@
 import os
 import logging
+from multipurpose_bot import MultipurposeBot  # Shim to new implementation
+
+# Backward-compatibility alias at module level
+EnhancedRefContestBot = MultipurposeBot
 import sqlite3
 import asyncio
 import io
