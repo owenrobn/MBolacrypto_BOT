@@ -63,6 +63,16 @@ class MultipurposeBot:
         logger.info(f"python-telegram-bot version: {ptb_ver}")
         logger.info(f"telegram.ext module file: {getattr(tg_ext, '__file__', 'unknown')}")
 
+    # ========== Helpers ==========
+    def _back_main_markup(self, chat_type: str):
+        """Inline back-to-main button for private chats only."""
+        try:
+            if chat_type == 'private':
+                return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
+        except Exception:
+            pass
+        return None
+
     # ========== Core run ==========
     def run(self):
         async def _post_init(app: Application):
@@ -83,6 +93,7 @@ class MultipurposeBot:
         # Commands
         application.add_handler(CommandHandler('start', self.start))
         application.add_handler(CommandHandler('help', self.help_command))
+        application.add_handler(CommandHandler('menu', self.menu_command))
         application.add_handler(CommandHandler('tz', self.tz_command))
         application.add_handler(CommandHandler('capital', self.capital_command))
         application.add_handler(CommandHandler('weather', self.weather_command))
@@ -233,7 +244,12 @@ class MultipurposeBot:
             "• Referral Events: create/join events, track referrals, view leaderboards\n\n"
             "Use /start to open the menu and explore features. For referrals, grab your link from the menu and share it. If you host events, you can optionally set a Telegram group so referrals are redirected there."
         )
-        await update.message.reply_text(msg)
+        chat_type = update.effective_chat.type if update.effective_chat else 'private'
+        markup = self._back_main_markup(chat_type)
+        if markup:
+            await update.message.reply_text(msg, reply_markup=markup)
+        else:
+            await update.message.reply_text(msg + "\n\nUse /menu to open the main menu.")
 
     # ========== Menus: Referral Center and Main Menu Renderer ==========
     async def show_main_menu(self, query, user_id: int):
@@ -301,18 +317,38 @@ class MultipurposeBot:
     async def capital_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         args = context.args
         if not args:
-            await update.message.reply_text("Usage: /capital <AFRICA_COUNTRY_CODE> e.g. /capital GH")
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                "Usage: /capital <AFRICA_COUNTRY_CODE> e.g. /capital GH" +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
             return
         code = args[0].upper()
         info = AFRICA_INFO.get(code)
         if not info:
-            await update.message.reply_text("Unknown or unsupported country code. Try NG, GH, KE, ZA, EG, DZ, MA, TZ")
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                "Unknown or unsupported country code. Try NG, GH, KE, ZA, EG, DZ, MA, TZ" +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
             return
-        await update.message.reply_text(f"Capital of {info['country']}: {info['capital']}")
+        markup = self._back_main_markup(update.effective_chat.type)
+        await update.message.reply_text(
+            f"Capital of {info['country']}: {info['capital']}" +
+            ("\n\nUse /menu to open the main menu." if not markup else ""),
+            reply_markup=markup
+        )
 
     async def weather_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
-            await update.message.reply_text("Usage: /weather <city or country>")
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                "Usage: /weather <city or country>" +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
             return
         query = " ".join(context.args)
         try:
@@ -322,28 +358,51 @@ class MultipurposeBot:
                     params={"name": query, "count": 1}
                 )
                 if geo.status_code != 200:
-                    await update.message.reply_text("Failed to geocode. Try a different place.")
+                    markup = self._back_main_markup(update.effective_chat.type)
+                    await update.message.reply_text(
+                        "Failed to geocode. Try a different place." +
+                        ("\n\nUse /menu to open the main menu." if not markup else ""),
+                        reply_markup=markup
+                    )
                     return
-                g = geo.json()
-                if not g.get('results'):
-                    await update.message.reply_text("Location not found.")
+                j = geo.json()
+                res = (j or {}).get('results') or []
+                if not res:
+                    markup = self._back_main_markup(update.effective_chat.type)
+                    await update.message.reply_text(
+                        "Place not found. Try a different query." +
+                        ("\n\nUse /menu to open the main menu." if not markup else ""),
+                        reply_markup=markup
+                    )
                     return
-                lat = g['results'][0]['latitude']
-                lon = g['results'][0]['longitude']
+                lat = res[0]['latitude']; lon = res[0]['longitude']
                 wx = await client.get(
                     "https://api.open-meteo.com/v1/forecast",
                     params={"latitude": lat, "longitude": lon, "current_weather": True}
                 )
                 if wx.status_code != 200:
-                    await update.message.reply_text("Weather API error.")
+                    markup = self._back_main_markup(update.effective_chat.type)
+                    await update.message.reply_text(
+                        "Weather API error." +
+                        ("\n\nUse /menu to open the main menu." if not markup else ""),
+                        reply_markup=markup
+                    )
                     return
                 w = wx.json().get('current_weather') or {}
-                await update.message.reply_text(
-                    f"Weather for {query}: {w.get('temperature', '?')}°C, wind {w.get('windspeed', '?')} km/h"
-                )
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                f"Weather for {query}: {w.get('temperature', '?')}°C, wind {w.get('windspeed', '?')} km/h" +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
         except Exception as e:
             logger.error(f"/weather error: {e}")
-            await update.message.reply_text("Error fetching weather.")
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                "Error fetching weather." +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
 
     async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Global error handler: log exception and try to notify the user gracefully."""
@@ -361,22 +420,75 @@ class MultipurposeBot:
 
     async def fancy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
-            await update.message.reply_text("Usage: /fancy <text>")
+            markup = self._back_main_markup(update.effective_chat.type)
+            await update.message.reply_text(
+                "Usage: /fancy <text>" +
+                ("\n\nUse /menu to open the main menu." if not markup else ""),
+                reply_markup=markup
+            )
             return
         text = " ".join(context.args)
         styled = ''.join(ch + '͟' for ch in text)  # simple underline style
-        await update.message.reply_text(styled)
+        markup = self._back_main_markup(update.effective_chat.type)
+        await update.message.reply_text(
+            styled + ("\n\nUse /menu to open the main menu." if not markup else ""),
+            reply_markup=markup
+        )
 
     # ========== Opt-in / Broadcast ==========
     async def join_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         db.set_opt_in(user.id, True)
-        await update.message.reply_text("You're subscribed to broadcasts. Use /stop to unsubscribe.")
+        markup = self._back_main_markup(update.effective_chat.type)
+        await update.message.reply_text(
+            "You're subscribed to broadcasts. Use /stop to unsubscribe." +
+            ("\n\nUse /menu to open the main menu." if not markup else ""),
+            reply_markup=markup
+        )
 
     async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user = update.effective_user
         db.set_opt_in(user.id, False)
-        await update.message.reply_text("You have unsubscribed. Send /join to subscribe again.")
+        markup = self._back_main_markup(update.effective_chat.type)
+        await update.message.reply_text(
+            "You have unsubscribed. Send /join to subscribe again." +
+            ("\n\nUse /menu to open the main menu." if not markup else ""),
+            reply_markup=markup
+        )
+
+    async def menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Open the main menu via command. In private, show inline menu; in groups, hint to DM or use buttons where applicable."""
+        try:
+            chat = update.effective_chat
+            user_id = update.effective_user.id if update.effective_user else None
+            if chat.type == 'private':
+                # Build the same keyboard as show_main_menu
+                keyboard: List[List[InlineKeyboardButton]] = []
+                keyboard.append([InlineKeyboardButton("🛠️ Utilities", callback_data="noop")])
+                keyboard.append([
+                    InlineKeyboardButton("🕒 Timezone (/tz)", callback_data="help_tz"),
+                    InlineKeyboardButton("🌦️ Weather", callback_data="help_weather")
+                ])
+                keyboard.append([
+                    InlineKeyboardButton("🏙️ Capital", callback_data="help_capital"),
+                    InlineKeyboardButton("🆔 My ID", callback_data="help_myid")
+                ])
+                keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
+                try:
+                    if db.is_admin(user_id) or (hasattr(self, 'admin_ids') and user_id in self.admin_ids):
+                        keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
+                except Exception:
+                    pass
+                keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
+                await update.message.reply_text("Main Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                await update.message.reply_text("Open a private chat with me and use /start or /menu to access the main menu.")
+        except Exception as e:
+            logger.error(f"/menu error: {e}")
+            try:
+                await update.message.reply_text("Could not open menu. Please try again.")
+            except Exception:
+                pass
 
     async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
@@ -411,7 +523,12 @@ class MultipurposeBot:
 
     # ========== Admin management ==========
     async def myid_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(f"Your Telegram user ID: {update.effective_user.id}")
+        markup = self._back_main_markup(update.effective_chat.type)
+        await update.message.reply_text(
+            f"Your Telegram user ID: {update.effective_user.id}" +
+            ("\n\nUse /menu to open the main menu." if not markup else ""),
+            reply_markup=markup
+        )
 
     async def admins_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
