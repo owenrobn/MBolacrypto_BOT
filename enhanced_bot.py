@@ -1071,7 +1071,7 @@ Good luck! 🍀"""
             async def _post_init(app: Application):
                 try:
                     await app.bot.delete_webhook(drop_pending_updates=True)
-                    logger.info("Webhook deleted (if existed); proceeding with polling.")
+                    logger.info("Webhook deleted (if existed) before starting.")
                 except Exception as e:
                     logger.warning(f"Failed to delete webhook (may be unset already): {e}")
 
@@ -1091,10 +1091,29 @@ Good luck! 🍀"""
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
             application.add_error_handler(self.error_handler)
             
-            logger.info("🚀 Enhanced referral contest bot with group links is starting...")
-            
-            # Run polling (PTB 20/21 compatible defaults)
-            application.run_polling()
+            logger.info("🚀 Enhanced referral contest bot is starting...")
+
+            # Decide between webhook (Render Web) and polling (local/dev)
+            port = os.getenv("PORT")
+            webhook_url = os.getenv("WEBHOOK_URL") or os.getenv("RENDER_EXTERNAL_URL")
+
+            if port:
+                # Webhook mode for Render Web service
+                if not webhook_url:
+                    logger.warning("PORT is set but WEBHOOK_URL/RENDER_EXTERNAL_URL not found. Falling back to polling.")
+                    application.run_polling()
+                else:
+                    logger.info(f"Starting in WEBHOOK mode on port {port}, url: {webhook_url}")
+                    application.run_webhook(
+                        listen="0.0.0.0",
+                        port=int(port),
+                        webhook_url=webhook_url,
+                        drop_pending_updates=True,
+                    )
+            else:
+                # Polling mode
+                logger.info("Starting in POLLING mode")
+                application.run_polling()
             
         except Exception as e:
             logger.error(f"Critical error starting bot: {e}")
