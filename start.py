@@ -8,7 +8,7 @@ import os
 import sys
 import time
 import logging
-from enhanced_bot import EnhancedRefContestBot
+from multipurpose_bot import MultipurposeBot
 
 # Configure logging for production
 logging.basicConfig(
@@ -26,7 +26,7 @@ def main():
     try:
         logger.info("🚀 Starting multipurpose bot...")
         # Initialize and run bot (blocking)
-        bot = EnhancedRefContestBot()
+        bot = MultipurposeBot()
         bot.run()
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
