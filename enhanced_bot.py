@@ -803,11 +803,11 @@ class EnhancedRefContestBot:
             await query.edit_message_text("Error loading stats. Please try again.")
     
     async def show_leaderboard(self, query):
-        """Show contest leaderboard."""
+        """Show referral leaderboard."""
         try:
             leaderboard = db.get_leaderboard(10)
             
-            leaderboard_msg = "🏆 Contest Leaderboard\n\n"
+            leaderboard_msg = "🏆 Referral Leaderboard\n\n"
             
             if leaderboard:
                 medals = ["🥇", "🥈", "🥉"] + ["🏅"] * 7
