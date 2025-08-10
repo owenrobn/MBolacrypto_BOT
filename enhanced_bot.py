@@ -987,6 +987,65 @@ Good luck! 🍀"""
         except Exception as e:
             logger.error(f"Error in skip_group_link: {e}")
             await query.edit_message_text("Error skipping group link. Please try again.")
+
+    async def end_event_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """End an event by its public code. Only the host can end their event.
+
+        Usage:
+          /end_event <event_code>
+        """
+        try:
+            user = update.effective_user
+            args = context.args
+            if not args:
+                await update.message.reply_text(
+                    "Usage: /end_event <event_code>\nYou can find the event code in your event details.")
+                return
+
+            event_code = args[0].strip()
+
+            # Look up event by code
+            with sqlite3.connect(db.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id, title, host_id, is_active FROM events WHERE event_code = ?",
+                    (event_code,)
+                )
+                row = cursor.fetchone()
+
+                if not row:
+                    await update.message.reply_text("❌ Event not found. Check the event code and try again.")
+                    return
+
+                event_id, title, host_id, is_active = row
+
+                if host_id != user.id:
+                    await update.message.reply_text("❌ Only the event host can end this event.")
+                    return
+
+                if not is_active:
+                    await update.message.reply_text("ℹ️ This event is already ended.")
+                    return
+
+                # End the event
+                cursor.execute("UPDATE events SET is_active = 0 WHERE id = ?", (event_id,))
+                conn.commit()
+
+            # Fetch final stats for confirmation
+            stats = db.get_event_stats(event_id)
+            msg = [
+                "✅ Event Ended",
+                f"📅 Event: {title}",
+                "",
+                f"👥 Total participants: {stats.get('total_participants', 0)}",
+                f"🔗 Total referrals: {stats.get('total_referrals', 0)}",
+            ]
+            await update.message.reply_text("\n".join(msg))
+            logger.info(f"Event {event_id} ({event_code}) ended by host {user.id}")
+
+        except Exception as e:
+            logger.error(f"Error in end_event_command: {e}")
+            await update.message.reply_text("Error ending event. Please try again later.")
     
     def run(self):
         """Start the bot with improved error handling."""
@@ -1010,6 +1069,7 @@ Good luck! 🍀"""
             # Add handlers
             application.add_handler(CommandHandler("start", self.start))
             application.add_handler(CommandHandler("leaderboard", self.group_leaderboard_command))
+            application.add_handler(CommandHandler("end_event", self.end_event_command))
             application.add_handler(CallbackQueryHandler(self.button_handler))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
             
