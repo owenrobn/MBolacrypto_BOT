@@ -149,7 +149,7 @@ class EnhancedRefContestBot:
                     event_id=event_id
                 )
                 
-                welcome_msg = f"🎉 Welcome to the Referral Contest, {user.first_name}!\n\n"
+                welcome_msg = f"👋 Welcome, {user.first_name}!\n\n"
                 
                 if referred_by_id:
                     referrer = db.get_user(referred_by_id)
@@ -162,7 +162,7 @@ class EnhancedRefContestBot:
                 
                 welcome_msg += f"🔗 Your unique referral code: {user_referral_code}\n"
                 welcome_msg += f"📱 Your referral link: https://t.me/{self.bot_username}?start={user_referral_code}\n\n"
-                welcome_msg += "Share your link to earn points in the contest! 🏆"
+                welcome_msg += "Share your link to invite friends and track referrals. 🏆"
                 
             else:
                 user_referral_code = existing_user['referral_code']
@@ -530,7 +530,7 @@ class EnhancedRefContestBot:
                 # Back button
                 keyboard.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")])
             else:
-                events_msg += "No events created yet. Create your first event to start hosting referral contests!"
+                events_msg += "No events created yet. Create your first event to start hosting referral programs!"
                 keyboard = [
                     [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
                     [InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]
@@ -553,7 +553,7 @@ class EnhancedRefContestBot:
             
             await query.edit_message_text(
                 "🎪 Create New Event\n\n"
-                "Let's create your referral contest event!\n\n"
+                "Let's create your referral event!\n\n"
                 "Please enter the event title:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="back_to_menu")]])
             )
@@ -833,33 +833,15 @@ class EnhancedRefContestBot:
     async def show_help(self, query):
         """Show help information."""
         try:
-            help_msg = """ℹ️ How the Referral Contest Works
+            help_msg = """ℹ️ About This Bot
 
-🎯 Goal: Invite as many people as possible using your unique referral link!
+This is a multipurpose assistant bot with:
+• Utilities: timezone (/tz), capitals (/capital), weather (/weather)
+• Text fun: fancy text (/fancy)
+• Stickers: send a photo in private chat to get a sticker
+• Referral Events: create/join events, track referrals, view leaderboards
 
-📋 How to participate:
-1. Get your unique referral link from the main menu
-2. Share it with friends, family, and social media
-3. When someone joins using your link, you get a point!
-4. Check the leaderboard to see your ranking
-
-🎪 Event Hosting:
-• Create your own referral contests
-• Set group links to redirect referrals to your groups
-• Track all participants in your events
-• View detailed event statistics
-
-🏆 Commands:
-• /start - Get your referral link and main menu
-• Use the buttons to navigate
-
-💡 Tips:
-• Share your link on social media for maximum reach
-• Create events for specific contests or campaigns
-• Set group links to automatically direct referrals to your groups
-• The more people join through your link, the higher you rank!
-
-Good luck! 🍀"""
+Use /start to open the menu and explore features. For referrals, grab your link from the menu and share it. If you host events, you can optionally set a Telegram group so referrals are redirected there. """
             
             # Back button
             keyboard = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu")]]
@@ -1011,7 +993,7 @@ Good luck! 🍀"""
                 event_code = event_row[2]
             
             success_msg = f"🎉 Successfully joined: {event_title}\n\n"
-            success_msg += "You can now participate in this event's referral contest!\n"
+            success_msg += "You can now participate in this event's referral program!\n"
             success_msg += "Use your personal referral link to invite others to this event."
             
             keyboard = [
@@ -1197,7 +1179,7 @@ Good luck! 🍀"""
             # Get leaderboard data
             leaderboard = db.get_leaderboard(10)
             
-            leaderboard_msg = f"🏆 Referral Contest Leaderboard\n"
+            leaderboard_msg = f"🏆 Referral Leaderboard\n"
             leaderboard_msg += f"📊 Requested by {update.effective_user.first_name}\n\n"
             
             if leaderboard:
@@ -1379,7 +1361,7 @@ Good luck! 🍀"""
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
             application.add_error_handler(self.error_handler)
             
-            logger.info("🚀 Enhanced referral contest bot is starting...")
+            logger.info("🚀 Enhanced multipurpose bot is starting...")
 
             # Decide between webhook (Render Web) and polling (local/dev)
             port = os.getenv("PORT")
