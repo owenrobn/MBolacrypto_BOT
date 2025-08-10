@@ -261,6 +261,30 @@ class Database:
             
             conn.commit()
             return event_code
+
+    def get_user_events(self, host_id: int) -> List[dict]:
+        """Return a list of events hosted by the given user."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT id, event_code, title, description, group_link, created_at, is_active
+                FROM events
+                WHERE host_id = ?
+                ORDER BY created_at DESC
+                LIMIT 50
+            ''', (host_id,))
+            events = []
+            for row in cursor.fetchall():
+                events.append({
+                    'id': row[0],
+                    'event_code': row[1],
+                    'title': row[2],
+                    'description': row[3],
+                    'group_link': row[4],
+                    'created_at': row[5],
+                    'is_active': bool(row[6])
+                })
+            return events
     
     def get_event_stats(self, event_id: int) -> dict:
         """Get statistics for a specific event."""
