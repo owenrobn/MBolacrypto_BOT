@@ -102,6 +102,7 @@ class MultipurposeBot:
         application.add_handler(CallbackQueryHandler(self.button_handler))
         application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, self.photo_to_sticker))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
+        application.add_error_handler(self.error_handler)
 
         logger.info("🚀 Multipurpose bot is starting...")
 
@@ -283,6 +284,20 @@ class MultipurposeBot:
         except Exception as e:
             logger.error(f"/weather error: {e}")
             await update.message.reply_text("Error fetching weather.")
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Global error handler: log exception and try to notify the user gracefully."""
+        try:
+            logger.exception("Unhandled exception while handling update: %s", update, exc_info=context.error)
+            if isinstance(update, Update) and update.effective_chat:
+                try:
+                    await context.bot.send_message(chat_id=update.effective_chat.id,
+                                                   text="⚠️ Oops! An error occurred. Please try again.")
+                except Exception:
+                    pass
+        except Exception:
+            # Never raise from error handler
+            pass
 
     async def fancy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not context.args:
