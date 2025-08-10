@@ -991,24 +991,21 @@ Good luck! 🍀"""
     def run(self):
         """Start the bot with improved error handling."""
         try:
-            # Create application with updated configuration
-            application = Application.builder().token(self.bot_token).build()
-            
-            # Ensure no webhook is set (webhook + getUpdates conflict). Drop pending updates.
-            async def _prep(app: Application):
+            # Define post_init hook to ensure no webhook is set (avoids getUpdates conflict)
+            async def _post_init(app: Application):
                 try:
                     await app.bot.delete_webhook(drop_pending_updates=True)
+                    logger.info("Webhook deleted (if existed); proceeding with polling.")
                 except Exception as e:
                     logger.warning(f"Failed to delete webhook (may be unset already): {e}")
-            try:
-                asyncio.run(_prep(application))
-            except RuntimeError:
-                # If an event loop exists, use a dedicated one
-                loop = asyncio.new_event_loop()
-                try:
-                    loop.run_until_complete(_prep(application))
-                finally:
-                    loop.close()
+
+            # Create application with updated configuration and post-init hook
+            application = (
+                Application.builder()
+                .token(self.bot_token)
+                .post_init(_post_init)
+                .build()
+            )
             
             # Add handlers
             application.add_handler(CommandHandler("start", self.start))
