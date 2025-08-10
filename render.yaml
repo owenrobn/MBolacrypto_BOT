@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: ref-contest-bot
     env: python
     pythonVersion: 3.12.3
@@ -13,6 +13,10 @@ services:
         sync: false
       - key: DB_PATH
         value: /data/contest.db
+      # Provide your public service URL here for Telegram webhook
+      # Example after first deploy: https://ref-contest-bot.onrender.com
+      - key: WEBHOOK_URL
+        sync: false
     disk:
       name: data
       mountPath: /data
