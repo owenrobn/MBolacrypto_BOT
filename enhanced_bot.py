@@ -1046,6 +1046,23 @@ Good luck! 🍀"""
         except Exception as e:
             logger.error(f"Error in end_event_command: {e}")
             await update.message.reply_text("Error ending event. Please try again later.")
+
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Log the error and send a friendly message to the user (if possible)."""
+        try:
+            logger.exception("Unhandled exception while handling update: %s", update, exc_info=context.error)
+            # Try to inform the user if we can
+            if isinstance(update, Update):
+                # Prefer replying to where it happened
+                if update.effective_chat and update.effective_chat.id:
+                    try:
+                        await context.bot.send_message(chat_id=update.effective_chat.id,
+                                                       text="⚠️ Oops! An error occurred. Please try again.")
+                    except Exception:
+                        pass
+        except Exception:
+            # Never let error handler raise
+            pass
     
     def run(self):
         """Start the bot with improved error handling."""
@@ -1072,6 +1089,7 @@ Good luck! 🍀"""
             application.add_handler(CommandHandler("end_event", self.end_event_command))
             application.add_handler(CallbackQueryHandler(self.button_handler))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
+            application.add_error_handler(self.error_handler)
             
             logger.info("🚀 Enhanced referral contest bot with group links is starting...")
             
