@@ -45,6 +45,18 @@ class EnhancedRefContestBot:
     def __init__(self):
         self.bot_token = os.getenv('BOT_TOKEN')
         self.bot_username = os.getenv('BOT_USERNAME')
+        # Admin IDs for privileged commands (e.g., /broadcast). Comma-separated user IDs.
+        admin_ids_env = os.getenv('ADMIN_IDS', '')
+        try:
+            self.admin_ids = {int(x.strip()) for x in admin_ids_env.split(',') if x.strip()}
+        except Exception:
+            self.admin_ids = set()
+        # Seed DB admins from env on startup (DB is source of truth afterwards)
+        try:
+            if self.admin_ids:
+                db.seed_admins(sorted(list(self.admin_ids)))
+        except Exception as e:
+            logger.warning(f"Failed to seed admins from ADMIN_IDS: {e}")
         
         if not self.bot_token:
             raise ValueError("BOT_TOKEN not found in environment variables")
@@ -336,18 +348,20 @@ class EnhancedRefContestBot:
         return {"Bold": bold, "Monospace": monospace, "SmallCaps": smallcaps}
 
     async def fancy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            await update.message.reply_text("Usage: /fancy <text>")
+        variants = self._stylize_variants(' '.join(context.args))
+        if not variants:
+            await update.effective_chat.send_message("Usage: /fancy <text>")
             return
-        text = " ".join(context.args)
-        variants = self._stylize_variants(text)
-        reply = "\n".join([f"{name}: {styled}" for name, styled in variants.items()])
-        await update.message.reply_text(reply)
+        text = "\n".join([f"• {name}: {val}" for name, val in variants.items()])
+        await update.effective_chat.send_message(text)
 
     async def photo_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Convert a received photo to a sticker and send as a reply (private chats only)."""
         try:
-            if update.effective_chat and update.effective_chat.type != "private":
-                return  # only in private chat to avoid spam
+            chat = update.effective_chat
+            if chat.type != "private":
+                return
+  # only in private chat to avoid spam
             photos = update.message.photo
             if not photos:
                 return
@@ -361,15 +375,129 @@ class EnhancedRefContestBot:
             out = io.BytesIO()
             img.save(out, format="WEBP")
             out.seek(0)
-            await update.message.reply_sticker(sticker=out)
+            await context.bot.send_sticker(chat_id=chat.id, sticker=out)
+
+    # ====== Admin: Broadcasts ======
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Admin-only: broadcast a text message to all opted-in users (/join). Usage: /broadcast <message>"""
+        try:
+            user = update.effective_user
+            if not user:
+                return
+            # Authorization: check DB admins primarily; allow ENV-seeded admins as fallback
+            if not db.is_admin(user.id) and user.id not in self.admin_ids:
+                await update.effective_chat.send_message("You are not authorized to use this command.")
+                return
+
+            message_text = ' '.join(context.args).strip()
+            if not message_text:
+                await update.effective_chat.send_message("Usage: /broadcast <message>")
+                return
+
+            target_ids = db.get_opted_in_users()
+            if not target_ids:
+                await update.effective_chat.send_message("No users have opted in to receive broadcasts.")
+                return
+
+            await update.effective_chat.send_message(f"Broadcasting to {len(target_ids)} users... This may take a moment.")
+
+            sent = 0
+            failed = 0
+            # Send in small batches to avoid hitting flood limits
+            batch_size = 25
+            for i in range(0, len(target_ids), batch_size):
+                batch = target_ids[i:i+batch_size]
+                tasks = []
+                for uid in batch:
+                    tasks.append(context.bot.send_message(chat_id=uid, text=message_text))
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for res in results:
+                    if isinstance(res, Exception):
+                        failed += 1
+                    else:
+                        sent += 1
+                # brief pause between batches
+                await asyncio.sleep(0.5)
+
+            await update.effective_chat.send_message(f"✅ Broadcast complete. Sent: {sent}, Failed: {failed}.")
         except Exception as e:
-            logger.error(f"photo_to_sticker error: {e}")
-            await update.message.reply_text("Failed to convert image to sticker.")
-    
+            logger.error(f"Broadcast error: {e}")
+            try:
+                await update.effective_chat.send_message("An error occurred while broadcasting.")
+            except Exception:
+                pass
+
+    # ====== Admins management (in-bot) ======
+    async def myid_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            await update.effective_chat.send_message(f"Your Telegram user ID: {user.id}")
+        except Exception as e:
+            logger.error(f"/myid error: {e}")
+
+    async def admins_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            admin_ids = db.list_admins()
+            if not admin_ids:
+                await update.effective_chat.send_message("No admins configured yet.")
+                return
+            ids_str = "\n".join([str(uid) for uid in admin_ids])
+            await update.effective_chat.send_message(f"Current admins (user IDs):\n{ids_str}")
+        except Exception as e:
+            logger.error(f"/admins error: {e}")
+            await update.effective_chat.send_message("Failed to list admins.")
+
+    async def addadmin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            if not db.is_admin(user.id) and user.id not in self.admin_ids:
+                await update.effective_chat.send_message("You are not authorized to add admins.")
+                return
+            if not context.args:
+                await update.effective_chat.send_message("Usage: /addadmin <user_id>")
+                return
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await update.effective_chat.send_message("Invalid user_id. It must be a number.")
+                return
+            if db.is_admin(target_id):
+                await update.effective_chat.send_message("User is already an admin.")
+                return
+            db.add_admin(target_id, added_by=user.id)
+            await update.effective_chat.send_message(f"✅ Added admin: {target_id}")
+        except Exception as e:
+            logger.error(f"/addadmin error: {e}")
+            await update.effective_chat.send_message("Failed to add admin.")
+
+    async def rmadmin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            if not db.is_admin(user.id) and user.id not in self.admin_ids:
+                await update.effective_chat.send_message("You are not authorized to remove admins.")
+                return
+            if not context.args:
+                await update.effective_chat.send_message("Usage: /rmadmin <user_id>")
+                return
+            try:
+                target_id = int(context.args[0])
+            except ValueError:
+                await update.effective_chat.send_message("Invalid user_id. It must be a number.")
+                return
+            if not db.is_admin(target_id):
+                await update.effective_chat.send_message("User is not an admin.")
+                return
+            db.remove_admin(target_id)
+            await update.effective_chat.send_message(f"✅ Removed admin: {target_id}")
+        except Exception as e:
+            logger.error(f"/rmadmin error: {e}")
+            await update.effective_chat.send_message("Failed to remove admin.")
+
     async def show_my_events(self, query, user_id: int):
         """Show user's hosted events with group link management."""
         try:
             events = db.get_user_events(user_id)
+{{ ... }}
             
             events_msg = "🎪 Your Hosted Events\n\n"
             
@@ -405,6 +533,7 @@ class EnhancedRefContestBot:
                 ]
             
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await query.edit_message_text(events_msg, reply_markup=reply_markup)
             
         except Exception as e:
@@ -1236,6 +1365,11 @@ Good luck! 🍀"""
             application.add_handler(CommandHandler("capital", self.capital_command))
             application.add_handler(CommandHandler("weather", self.weather_command))
             application.add_handler(CommandHandler("fancy", self.fancy_command))
+            application.add_handler(CommandHandler("broadcast", self.broadcast_command))
+            application.add_handler(CommandHandler("myid", self.myid_command))
+            application.add_handler(CommandHandler("admins", self.admins_command))
+            application.add_handler(CommandHandler("addadmin", self.addadmin_command))
+            application.add_handler(CommandHandler("rmadmin", self.rmadmin_command))
             application.add_handler(CallbackQueryHandler(self.button_handler))
             application.add_handler(MessageHandler(filters.PHOTO, self.photo_to_sticker))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
