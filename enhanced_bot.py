@@ -2,13 +2,18 @@ import os
 import logging
 import sqlite3
 import asyncio
+import io
+import re
+from typing import Dict
+
+import httpx
+from PIL import Image
 import telegram
 import telegram.ext as tg_ext
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
 from database import Database
-import re
 
 # Load environment variables
 load_dotenv()
@@ -22,6 +27,19 @@ logger = logging.getLogger(__name__)
 
 # Initialize database
 db = Database()
+
+# --- Phase 1 Utilities ---
+AFRICA_INFO: Dict[str, Dict[str, str]] = {
+    # Country code -> info
+    "NG": {"country": "Nigeria", "capital": "Abuja", "timezone": "Africa/Lagos"},
+    "GH": {"country": "Ghana", "capital": "Accra", "timezone": "Africa/Accra"},
+    "KE": {"country": "Kenya", "capital": "Nairobi", "timezone": "Africa/Nairobi"},
+    "ZA": {"country": "South Africa", "capital": "Pretoria (admin)", "timezone": "Africa/Johannesburg"},
+    "EG": {"country": "Egypt", "capital": "Cairo", "timezone": "Africa/Cairo"},
+    "DZ": {"country": "Algeria", "capital": "Algiers", "timezone": "Africa/Algiers"},
+    "MA": {"country": "Morocco", "capital": "Rabat", "timezone": "Africa/Casablanca"},
+    "TZ": {"country": "Tanzania", "capital": "Dodoma", "timezone": "Africa/Dar_es_Salaam"},
+}
 
 class EnhancedRefContestBot:
     def __init__(self):
@@ -222,6 +240,131 @@ class EnhancedRefContestBot:
                 await query.edit_message_text("An error occurred. Please try again or use /start.")
             except:
                 pass
+
+    # ===== Phase 1 Features =====
+    async def join_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            db.set_opt_in(user.id, True)
+            await update.message.reply_text("You are now subscribed to updates. Send /stop to unsubscribe.")
+        except Exception as e:
+            logger.error(f"/join error: {e}")
+            await update.message.reply_text("Failed to subscribe. Please try again later.")
+
+    async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            user = update.effective_user
+            db.set_opt_in(user.id, False)
+            await update.message.reply_text("You have unsubscribed. Send /join to subscribe again.")
+        except Exception as e:
+            logger.error(f"/stop error: {e}")
+            await update.message.reply_text("Failed to unsubscribe. Please try again later.")
+
+    async def tz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /tz <AFRICA_COUNTRY_CODE> e.g. /tz NG")
+            return
+        code = args[0].upper()
+        info = AFRICA_INFO.get(code)
+        if not info:
+            await update.message.reply_text("Unknown or unsupported country code. Try NG, GH, KE, ZA, EG, DZ, MA, TZ")
+            return
+        await update.message.reply_text(f"{info['country']} time zone: {info['timezone']}")
+
+    async def capital_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        args = context.args
+        if not args:
+            await update.message.reply_text("Usage: /capital <AFRICA_COUNTRY_CODE> e.g. /capital GH")
+            return
+        code = args[0].upper()
+        info = AFRICA_INFO.get(code)
+        if not info:
+            await update.message.reply_text("Unknown or unsupported country code. Try NG, GH, KE, ZA, EG, DZ, MA, TZ")
+            return
+        await update.message.reply_text(f"Capital of {info['country']}: {info['capital']}")
+
+    async def weather_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text("Usage: /weather <city or country>")
+            return
+        query = " ".join(context.args)
+        try:
+            # Geocode
+            async with httpx.AsyncClient(timeout=10) as client:
+                geo = await client.get(
+                    "https://geocoding-api.open-meteo.com/v1/search",
+                    params={"name": query, "count": 1}
+                )
+                if geo.status_code != 200:
+                    await update.message.reply_text("Geocoding failed. Try a different location.")
+                    return
+                data = geo.json()
+                results = data.get("results") or []
+                if not results:
+                    await update.message.reply_text("Location not found. Try a more specific name.")
+                    return
+                lat = results[0]["latitude"]
+                lon = results[0]["longitude"]
+                loc_name = results[0].get("name")
+
+                # Weather
+                w = await client.get(
+                    "https://api.open-meteo.com/v1/forecast",
+                    params={"latitude": lat, "longitude": lon, "current_weather": True}
+                )
+                if w.status_code != 200:
+                    await update.message.reply_text("Weather fetch failed. Please try later.")
+                    return
+                wj = w.json()
+                cw = wj.get("current_weather", {})
+                temp = cw.get("temperature")
+                wind = cw.get("windspeed")
+                await update.message.reply_text(
+                    f"Weather for {loc_name}:\nTemperature: {temp}°C\nWind: {wind} km/h")
+        except Exception as e:
+            logger.error(f"/weather error: {e}")
+            await update.message.reply_text("Error fetching weather.")
+
+    def _stylize_variants(self, text: str) -> Dict[str, str]:
+        bold = "".join(chr(0x1D5D4 + (ord(c) - 97)) if 'a' <= c <= 'z' else
+                         chr(0x1D5A0 + (ord(c) - 65)) if 'A' <= c <= 'Z' else c for c in text)
+        monospace = "".join(chr(0x1D68A + (ord(c) - 97)) if 'a' <= c <= 'z' else
+                             chr(0x1D670 + (ord(c) - 65)) if 'A' <= c <= 'Z' else c for c in text)
+        smallcaps_map = {"a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ғ","g":"ɢ","h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ","m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ","s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x","y":"ʏ","z":"ᴢ"}
+        smallcaps = "".join(smallcaps_map.get(c, smallcaps_map.get(c.lower(), c)) for c in text)
+        return {"Bold": bold, "Monospace": monospace, "SmallCaps": smallcaps}
+
+    async def fancy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not context.args:
+            await update.message.reply_text("Usage: /fancy <text>")
+            return
+        text = " ".join(context.args)
+        variants = self._stylize_variants(text)
+        reply = "\n".join([f"{name}: {styled}" for name, styled in variants.items()])
+        await update.message.reply_text(reply)
+
+    async def photo_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            if update.effective_chat and update.effective_chat.type != "private":
+                return  # only in private chat to avoid spam
+            photos = update.message.photo
+            if not photos:
+                return
+            best = photos[-1]
+            file = await context.bot.get_file(best.file_id)
+            b = await file.download_as_bytearray()
+            img = Image.open(io.BytesIO(b)).convert("RGBA")
+            # Resize to fit sticker constraints (max 512px)
+            max_size = 512
+            img.thumbnail((max_size, max_size))
+            out = io.BytesIO()
+            img.save(out, format="WEBP")
+            out.seek(0)
+            await update.message.reply_sticker(sticker=out)
+        except Exception as e:
+            logger.error(f"photo_to_sticker error: {e}")
+            await update.message.reply_text("Failed to convert image to sticker.")
     
     async def show_my_events(self, query, user_id: int):
         """Show user's hosted events with group link management."""
@@ -1087,7 +1230,14 @@ Good luck! 🍀"""
             application.add_handler(CommandHandler("start", self.start))
             application.add_handler(CommandHandler("leaderboard", self.group_leaderboard_command))
             application.add_handler(CommandHandler("end_event", self.end_event_command))
+            application.add_handler(CommandHandler("join", self.join_command))
+            application.add_handler(CommandHandler("stop", self.stop_command))
+            application.add_handler(CommandHandler("tz", self.tz_command))
+            application.add_handler(CommandHandler("capital", self.capital_command))
+            application.add_handler(CommandHandler("weather", self.weather_command))
+            application.add_handler(CommandHandler("fancy", self.fancy_command))
             application.add_handler(CallbackQueryHandler(self.button_handler))
+            application.add_handler(MessageHandler(filters.PHOTO, self.photo_to_sticker))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
             application.add_error_handler(self.error_handler)
             
