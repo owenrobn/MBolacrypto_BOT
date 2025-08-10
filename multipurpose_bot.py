@@ -179,9 +179,8 @@ class MultipurposeBot:
                         welcome_msg += f"✅ You joined via {referrer['first_name']}'s referral link!\n\n"
                 if redirect_to_group:
                     welcome_msg += "🎪 You've been invited to join a group. Use the button below to join.\n\n"
-                welcome_msg += f"🔗 Your referral code: {user_referral_code}\n"
-                welcome_msg += f"📱 Your link: https://t.me/{self.bot_username}?start={user_referral_code}\n\n"
-                welcome_msg += "Share your link to invite friends and track referrals. 🏆"
+                welcome_msg += "Use the menu below to explore features. Referral tools are inside the 🎯 Referral Center."
+                
             else:
                 welcome_msg = f"👋 Welcome back, {user.first_name}!\n\n"
 
@@ -201,15 +200,8 @@ class MultipurposeBot:
             # Stickers
             keyboard.append([InlineKeyboardButton("🩷 Stickers: send me a photo in private", callback_data="noop")])
 
-            # Referral events section
-            keyboard.append([InlineKeyboardButton("🎯 Referral Events", callback_data="noop")])
-            keyboard.extend([
-                [InlineKeyboardButton("📊 My Stats", callback_data="stats")],
-                [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
-                [InlineKeyboardButton("🎯 My Event Links", callback_data="my_event_links")],
-                [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
-                [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
-            ])
+            # Referral Center (consolidated)
+            keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
 
             # Admin section if authorized
             if db.is_admin(user.id) or user.id in self.admin_ids:
@@ -242,6 +234,65 @@ class MultipurposeBot:
             "Use /start to open the menu and explore features. For referrals, grab your link from the menu and share it. If you host events, you can optionally set a Telegram group so referrals are redirected there."
         )
         await update.message.reply_text(msg)
+
+    # ========== Menus: Referral Center and Main Menu Renderer ==========
+    async def show_main_menu(self, query, user_id: int):
+        """Render the main menu inline (without re-running /start)."""
+        try:
+            keyboard: List[List[InlineKeyboardButton]] = []
+            # Utilities
+            keyboard.append([InlineKeyboardButton("🛠️ Utilities", callback_data="noop")])
+            keyboard.append([
+                InlineKeyboardButton("🕒 Timezone (/tz)", callback_data="help_tz"),
+                InlineKeyboardButton("🌦️ Weather", callback_data="help_weather")
+            ])
+            keyboard.append([
+                InlineKeyboardButton("🏙️ Capital", callback_data="help_capital"),
+                InlineKeyboardButton("✨ Fancy Text", callback_data="help_fancy")
+            ])
+            # Stickers hint
+            keyboard.append([InlineKeyboardButton("🩷 Stickers: send me a photo in private", callback_data="noop")])
+            # Referral Center
+            keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
+            # Admin
+            try:
+                if db.is_admin(user_id) or user_id in self.admin_ids:
+                    keyboard.append([InlineKeyboardButton("🛡️ Admin", callback_data="noop")])
+                    keyboard.append([InlineKeyboardButton("📣 Broadcast (/broadcast)", callback_data="help_broadcast")])
+                    keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
+            except Exception:
+                pass
+            keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
+            await query.edit_message_text("Main Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception as e:
+            logger.error(f"show_main_menu error: {e}")
+            try:
+                await query.edit_message_text("Use /start to open the main menu.")
+            except Exception:
+                pass
+
+    async def show_referral_center(self, query, user_id: int):
+        """Show consolidated Referral Center submenu."""
+        try:
+            msg = (
+                "🎯 Referral Center\n\n"
+                "Manage and track your referral activities and events."
+            )
+            kb: List[List[InlineKeyboardButton]] = [
+                [InlineKeyboardButton("📊 My Stats", callback_data="stats")],
+                [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
+                [InlineKeyboardButton("🎯 My Event Links", callback_data="my_event_links")],
+                [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
+                [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
+                [InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")],
+            ]
+            await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
+        except Exception as e:
+            logger.error(f"show_referral_center error: {e}")
+            try:
+                await query.edit_message_text("Error loading Referral Center. Please try again.")
+            except Exception:
+                pass
 
     # ========== Utilities ==========
     async def tz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -457,6 +508,15 @@ class MultipurposeBot:
                 # No operation; keep menu
                 await query.answer("Use the menu buttons or /help")
                 return
+            if data == "ref_center":
+                await self.show_referral_center(query, user_id)
+                return
+            if data == "main_menu":
+                await self.show_main_menu(query, user_id)
+                return
+            if data == "help":
+                await self.show_help(query)
+                return
             if data == "stats":
                 await self.show_stats(query, user_id)
             elif data == "leaderboard":
@@ -522,7 +582,7 @@ class MultipurposeBot:
             "• Stickers: send a photo to me in private\n"
             "• Referral Events: create events, set group links, track referrals\n"
         )
-        await query.edit_message_text(help_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]))
+        await query.edit_message_text(help_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]))
 
     # ========== Referral: Stats / Leaderboard ==========
     async def show_stats(self, query, user_id: int):
@@ -545,7 +605,7 @@ class MultipurposeBot:
                 msg += f"... and {len(stats['referred_users']) - 5} more!\n"
         else:
             msg += "🔄 No referrals yet. Share your link to start!"
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]))
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]))
 
     async def show_leaderboard(self, query):
         lb = db.get_leaderboard(10)
@@ -559,7 +619,7 @@ class MultipurposeBot:
                     msg += f"{medal} {name}: {u['referral_count']} referrals\n"
         else:
             msg += "No participants yet. Be the first to start referring!"
-        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]))
+        await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]))
 
     # Group admin /leaderboard
     async def group_leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -613,11 +673,11 @@ class MultipurposeBot:
                     kb.append([InlineKeyboardButton(f"📊 {ev['title']} Stats", callback_data=f"event_{ev['id']}")])
                     if not ev.get('group_link'):
                         kb.append([InlineKeyboardButton("🎪 Set Group Link", callback_data=f"set_group_{ev['id']}")])
-                kb.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")])
+                kb.append([InlineKeyboardButton("🔙 Back", callback_data="ref_center")])
             else:
                 msg += "No events created yet. Create your first event to start hosting referral programs!"
                 kb = [[InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
-                      [InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]
+                      [InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         except Exception as e:
             logger.error(f"show_my_events error: {e}")
@@ -631,7 +691,7 @@ class MultipurposeBot:
                 "🎪 Create New Event\n\n"
                 "Let's create your referral event!\n\n"
                 "Please enter the event title:",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="noop")]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="ref_center")]])
             )
         except Exception as e:
             logger.error(f"start_create_event error: {e}")
@@ -705,8 +765,8 @@ class MultipurposeBot:
             if group_link:
                 msg += f"🎪 Group set: {group_link}\n"
             msg += f"\nShare: https://t.me/{self.bot_username}?start={event_code}"
-            kb = [[InlineKeyboardButton("📊 View Event", callback_data=(f"event_{event_id}" if event_id else "noop"))],
-                  [InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]
+            kb = [[InlineKeyboardButton("📊 View Event", callback_data=(f"event_{event_id}" if event_id else "ref_center"))],
+                  [InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         except Exception as e:
             logger.error(f"create_event_group_link error: {e}")
@@ -760,7 +820,7 @@ class MultipurposeBot:
             )
             kb = [[InlineKeyboardButton("📊 View Event", callback_data=f"event_{event_id}")],
                   [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
-                  [InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]
+                  [InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb))
             context.user_data.clear()
         except Exception as e:
@@ -784,7 +844,7 @@ class MultipurposeBot:
             )
             kb = [[InlineKeyboardButton("📊 View Event", callback_data=f"event_{event_id}")],
                   [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
-                  [InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]
+                  [InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
             context.user_data.clear()
         except Exception as e:
@@ -821,7 +881,7 @@ class MultipurposeBot:
                 for u in stats['top_referrers']:
                     name = u['first_name'] or u['username'] or str(u['user_id'])
                     msg.append(f"• {name}: {u['referral_count']}")
-            kb = [[InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")]]
+            kb = [[InlineKeyboardButton("🔙 Back", callback_data="ref_center")]]
             try:
                 # add My Event Link if participant
                 with sqlite3.connect(db.db_path) as conn:
@@ -866,7 +926,7 @@ class MultipurposeBot:
                     InlineKeyboardButton("🎯 Get Link", callback_data=f"event_link_{ev_id}"),
                     InlineKeyboardButton("📊 Event Stats", callback_data=f"event_{ev_id}")
                 ])
-            kb.append([InlineKeyboardButton("🔙 Back to Menu", callback_data="noop")])
+            kb.append([InlineKeyboardButton("🔙 Back", callback_data="ref_center")])
             await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb))
         except Exception as e:
             logger.error(f"show_my_event_links error: {e}")
