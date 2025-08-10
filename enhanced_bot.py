@@ -164,9 +164,8 @@ class EnhancedRefContestBot:
                     welcome_msg += f"🎪 You've been invited to join a special group!\n"
                     welcome_msg += f"👆 Click the button below to join the group\n\n"
                 
-                welcome_msg += f"🔗 Your unique referral code: {user_referral_code}\n"
-                welcome_msg += f"📱 Your referral link: https://t.me/{self.bot_username}?start={user_referral_code}\n\n"
-                welcome_msg += "Share your link to invite friends and track referrals. 🏆"
+                # Keep the main screen clean; move referral details into Referral Center
+                welcome_msg += "Use the menu below to explore features."
                 
             else:
                 user_referral_code = existing_user['referral_code']
@@ -177,8 +176,8 @@ class EnhancedRefContestBot:
                     welcome_msg += f"🎪 You've been invited to join a special group!\n"
                     welcome_msg += f"👆 Click the button below to join the group\n\n"
                 
-                welcome_msg += f"🔗 Your referral code: {user_referral_code}\n"
-                welcome_msg += f"📱 Your referral link: https://t.me/{self.bot_username}?start={user_referral_code}"
+                # Keep the main screen clean; move referral details into Referral Center
+                welcome_msg += "Use the menu below to explore features."
             
             # Create inline keyboard
             keyboard = []
@@ -195,11 +194,7 @@ class EnhancedRefContestBot:
             
             # Add regular menu buttons
             keyboard.extend([
-                [InlineKeyboardButton("📊 My Stats", callback_data="stats")],
-                [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
-                [InlineKeyboardButton("🎯 My Event Links", callback_data="my_event_links")],
-                [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
-                [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
+                [InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")],
                 [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
             ])
             
@@ -221,6 +216,9 @@ class EnhancedRefContestBot:
             user_id = query.from_user.id
             logger.info(f"Button pressed: {query.data} by user {user_id}")
             
+            if query.data == "ref_center":
+                await self.show_referral_center(query, user_id)
+                return
             if query.data == "stats":
                 await self.show_stats(query, user_id)
             elif query.data == "leaderboard":
@@ -1126,31 +1124,6 @@ Use /start to open the menu and explore features. For referrals, grab your link 
             if existing_user:
                 user_referral_code = existing_user['referral_code']
                 welcome_msg = f"👋 Main Menu - {user.first_name}\n\n"
-                welcome_msg += f"🔗 Your referral code: {user_referral_code}\n"
-                welcome_msg += f"📱 Your referral link: https://t.me/{self.bot_username}?start={user_referral_code}"
-                
-                # Create inline keyboard with all features
-                keyboard = [
-                    [InlineKeyboardButton("📊 My Stats", callback_data="stats")],
-                    [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")],
-                    [InlineKeyboardButton("🎪 My Events", callback_data="my_events")],
-                    [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
-                    [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
-                ]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                await query.edit_message_text(welcome_msg, reply_markup=reply_markup)
-            else:
-                await query.edit_message_text("Please use /start to register first.")
-                
-        except Exception as e:
-            logger.error(f"Error in back_to_menu: {e}")
-            await query.edit_message_text("Please use /start to return to the main menu.")
-    
-    async def group_leaderboard_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /leaderboard command in groups - only for group admins."""
-        try:
-            # Check if this is a group chat
             if update.effective_chat.type not in ['group', 'supergroup']:
                 await update.message.reply_text("This command only works in groups where I'm an admin.")
                 return
