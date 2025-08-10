@@ -92,6 +92,15 @@ class Database:
                 )
             ''')
 
+            # Admins table for in-bot admin management
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS admins (
+                    user_id INTEGER PRIMARY KEY,
+                    added_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
             conn.commit()
     
     def add_user(self, user_id: int, username: str = None, first_name: str = None, 
@@ -380,3 +389,40 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('SELECT user_id FROM user_prefs WHERE opted_in = 1')
             return [r[0] for r in cursor.fetchall()]
+
+    # ====== Admins management ======
+    def seed_admins(self, admin_ids: List[int]) -> None:
+        if not admin_ids:
+            return
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            for uid in admin_ids:
+                try:
+                    cursor.execute('INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, NULL)', (uid,))
+                except Exception:
+                    pass
+            conn.commit()
+
+    def add_admin(self, user_id: int, added_by: int | None = None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT OR IGNORE INTO admins (user_id, added_by) VALUES (?, ?)', (user_id, added_by))
+            conn.commit()
+
+    def remove_admin(self, user_id: int) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
+            conn.commit()
+
+    def list_admins(self) -> List[int]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT user_id FROM admins ORDER BY created_at ASC')
+            return [r[0] for r in cursor.fetchall()]
+
+    def is_admin(self, user_id: int) -> bool:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT 1 FROM admins WHERE user_id = ? LIMIT 1', (user_id,))
+            return cursor.fetchone() is not None
