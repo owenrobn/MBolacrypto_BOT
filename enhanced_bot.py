@@ -498,12 +498,10 @@ class EnhancedRefContestBot:
         except Exception as e:
             logger.error(f"/rmadmin error: {e}")
             await update.effective_chat.send_message("Failed to remove admin.")
-
     async def show_my_events(self, query, user_id: int):
         """Show user's hosted events with group link management."""
         try:
             events = db.get_user_events(user_id)
-{{ ... }}
             
             events_msg = "🎪 Your Hosted Events\n\n"
             
