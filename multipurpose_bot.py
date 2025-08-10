@@ -118,6 +118,10 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('tagactives', self.tagactives_command))
         application.add_handler(CommandHandler('setwarns', self.setwarns_command))
         application.add_handler(CommandHandler('setmute', self.setmute_command))
+        application.add_handler(CommandHandler('setautoban', self.setautoban_command))
+        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command))
+        application.add_handler(CommandHandler('groupconfig', self.group_config_command))
+        application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
         # Group leaderboard
         application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
 
@@ -848,7 +852,9 @@ class MultipurposeBot:
         if count >= gs['warn_threshold']:
             # Threshold reached: increment strikes and enforce
             strikes = db.add_strike(chat_id, target.id)
-            if strikes >= 2:
+            auto_ban = bool(gs.get('auto_ban_on_repeat', 1))
+            reset_on_mute = bool(gs.get('strikes_reset_on_mute', 1))
+            if auto_ban and strikes >= 2:
                 # Ban on repeated threshold breach
                 try:
                     await context.bot.ban_chat_member(chat_id, target.id)
@@ -860,7 +866,7 @@ class MultipurposeBot:
                 except Exception:
                     pass
             else:
-                # First threshold breach => mute and reset warnings
+                # First threshold breach (or repeat when autoban disabled) => mute
                 minutes = gs['mute_minutes_default']
                 until = datetime.utcnow() + timedelta(minutes=minutes)
                 try:
@@ -872,8 +878,12 @@ class MultipurposeBot:
                         can_add_web_page_previews=False,
                     )
                     await context.bot.restrict_chat_member(chat_id, target.id, permissions=perms, until_date=until)
-                    await update.message.reply_text(f"🔇 Auto-muted for {minutes} minutes due to warnings. Next time will result in a ban.")
-                    db.clear_warnings(chat_id, target.id)
+                    if auto_ban:
+                        await update.message.reply_text(f"🔇 Auto-muted for {minutes} minutes due to warnings. Next time will result in a ban.")
+                    else:
+                        await update.message.reply_text(f"🔇 Auto-muted for {minutes} minutes due to warnings.")
+                    if reset_on_mute:
+                        db.clear_warnings(chat_id, target.id)
                 except Exception as e:
                     logger.warning(f"mute on threshold failed: {e}")
 
@@ -1033,7 +1043,9 @@ class MultipurposeBot:
                 await context.bot.send_message(chat_id=chat.id, text=f"⚠️ {user.first_name}: links are not allowed here. Warning {count}/{gs['warn_threshold']}")
                 if count >= gs['warn_threshold']:
                     strikes = db.add_strike(chat.id, user.id)
-                    if strikes >= 2:
+                    auto_ban = bool(gs.get('auto_ban_on_repeat', 1))
+                    reset_on_mute = bool(gs.get('strikes_reset_on_mute', 1))
+                    if auto_ban and strikes >= 2:
                         try:
                             await context.bot.ban_chat_member(chat.id, user.id)
                             await context.bot.send_message(chat_id=chat.id, text=f"🚫 {user.first_name} has been banned due to repeated violations.")
@@ -1054,12 +1066,166 @@ class MultipurposeBot:
                         )
                         try:
                             await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
-                            await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {gs['mute_minutes_default']} minutes. Next time will result in a ban.")
-                            db.clear_warnings(chat.id, user.id)
+                            if auto_ban:
+                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {gs['mute_minutes_default']} minutes. Next time will result in a ban.")
+                            else:
+                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {gs['mute_minutes_default']} minutes.")
+                            if reset_on_mute:
+                                db.clear_warnings(chat.id, user.id)
                         except Exception as e:
                             logger.warning(f"auto mute failed: {e}")
+
+    async def setautoban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can change this.")
+            return
+        gs = db.get_group_settings(chat_id)
+        if not context.args:
+            await update.message.reply_text(f"Auto-ban on repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}\nUsage: /setautoban on|off")
+            return
+        val = context.args[0].lower()
+        if val not in ['on','off']:
+            await update.message.reply_text("Usage: /setautoban on|off")
+            return
+        db.set_group_setting(chat_id, 'auto_ban_on_repeat', 1 if val=='on' else 0)
+        await update.message.reply_text(f"✅ Auto-ban on repeat set to {'ON' if val=='on' else 'OFF'}.")
+
+    async def setresetwarns_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can change this.")
+            return
+        gs = db.get_group_settings(chat_id)
+        if not context.args:
+            await update.message.reply_text(f"Reset warnings after mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}\nUsage: /setresetwarns on|off")
+            return
+        val = context.args[0].lower()
+        if val not in ['on','off']:
+            await update.message.reply_text("Usage: /setresetwarns on|off")
+            return
+        db.set_group_setting(chat_id, 'strikes_reset_on_mute', 1 if val=='on' else 0)
+        await update.message.reply_text(f"✅ Reset warnings after mute set to {'ON' if val=='on' else 'OFF'}.")
         except Exception as e:
             logger.error(f"group_message_handler error: {e}")
+
+    # ===== Group Config Inline UI =====
+    def _render_group_config_kb(self, gs: Dict) -> InlineKeyboardMarkup:
+        anti = 'ON' if gs.get('anti_links', 0) else 'OFF'
+        autoban = 'ON' if gs.get('auto_ban_on_repeat', 1) else 'OFF'
+        resetw = 'ON' if gs.get('strikes_reset_on_mute', 1) else 'OFF'
+        warn = int(gs.get('warn_threshold', 3))
+        mute = int(gs.get('mute_minutes_default', 10))
+        rows = [
+            [InlineKeyboardButton(f"Anti-links: {anti}", callback_data='gc:toggle:anti_links')],
+            [
+                InlineKeyboardButton('−', callback_data='gc:dec:warn_threshold'),
+                InlineKeyboardButton(f"Warns: {warn}", callback_data='gc:nop'),
+                InlineKeyboardButton('+', callback_data='gc:inc:warn_threshold'),
+            ],
+            [
+                InlineKeyboardButton('−', callback_data='gc:dec:mute_minutes_default'),
+                InlineKeyboardButton(f"Mute(min): {mute}", callback_data='gc:nop'),
+                InlineKeyboardButton('+', callback_data='gc:inc:mute_minutes_default'),
+            ],
+            [InlineKeyboardButton(f"Auto-ban: {autoban}", callback_data='gc:toggle:auto_ban_on_repeat')],
+            [InlineKeyboardButton(f"Reset warns after mute: {resetw}", callback_data='gc:toggle:strikes_reset_on_mute')],
+            [InlineKeyboardButton('🔄 Refresh', callback_data='gc:refresh'), InlineKeyboardButton('✖ Close', callback_data='gc:close')],
+        ]
+        return InlineKeyboardMarkup(rows)
+
+    async def group_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text('Only admins can open group config.')
+            return
+        gs = db.get_group_settings(chat_id)
+        text = (
+            "Group Configuration\n\n"
+            f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}\n"
+            f"Warn threshold: {gs.get('warn_threshold',3)}\n"
+            f"Mute minutes: {gs.get('mute_minutes_default',10)}\n"
+            f"Auto-ban on repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}\n"
+            f"Reset warns after mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}\n"
+        )
+        await update.message.reply_text(text, reply_markup=self._render_group_config_kb(gs))
+
+    async def group_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data  # gc:action:key
+        chat = query.message.chat
+        user = update.effective_user
+        if chat.type not in ['group', 'supergroup']:
+            return
+        if not await self._is_group_admin(context.bot, chat.id, user.id):
+            await query.reply_text('Admins only.')
+            return
+        try:
+            parts = data.split(':')
+            if len(parts) < 2:
+                return
+            action = parts[1]
+            key = parts[2] if len(parts) > 2 else None
+            gs = db.get_group_settings(chat.id)
+            if action == 'nop':
+                return
+            elif action == 'close':
+                try:
+                    await query.message.delete()
+                except Exception:
+                    pass
+                return
+            elif action == 'refresh':
+                await query.message.edit_text(
+                    "Group Configuration\n\n"
+                    f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}\n"
+                    f"Warn threshold: {gs.get('warn_threshold',3)}\n"
+                    f"Mute minutes: {gs.get('mute_minutes_default',10)}\n"
+                    f"Auto-ban on repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}\n"
+                    f"Reset warns after mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}\n",
+                    reply_markup=self._render_group_config_kb(gs)
+                )
+                return
+            elif action == 'toggle' and key:
+                # boolean toggles
+                current = int(gs.get(key, 0))
+                db.set_group_setting(chat.id, key, 0 if current else 1)
+            elif action in ('inc','dec') and key:
+                val = int(gs.get(key, 0))
+                if key == 'warn_threshold':
+                    val = max(1, min(10, val + (1 if action=='inc' else -1)))
+                elif key == 'mute_minutes_default':
+                    val = max(1, min(10080, val + (1 if action=='inc' else -1)))
+                else:
+                    # unknown numeric key: ignore
+                    pass
+                db.set_group_setting(chat.id, key, val)
+            # re-fetch and update UI
+            gs = db.get_group_settings(chat.id)
+            await query.message.edit_text(
+                "Group Configuration\n\n"
+                f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}\n"
+                f"Warn threshold: {gs.get('warn_threshold',3)}\n"
+                f"Mute minutes: {gs.get('mute_minutes_default',10)}\n"
+                f"Auto-ban on repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}\n"
+                f"Reset warns after mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}\n",
+                reply_markup=self._render_group_config_kb(gs)
+            )
+        except Exception as e:
+            logger.warning(f"group_config_callback error: {e}")
 
     async def setwarns_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Set per-group warning threshold
