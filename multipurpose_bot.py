@@ -1287,9 +1287,9 @@ class MultipurposeBot:
                     if len(window) > threshold:
                         # Exceeded flood threshold: delete and apply action (mute)
                         try:
-                            if message:
+                            if msg:
                                 try:
-                                    await context.bot.delete_message(chat.id, message.message_id)
+                                    await context.bot.delete_message(chat.id, msg.message_id)
                                 except Exception:
                                     pass
                             minutes = int(gs.get('mute_minutes_default', 10) or 10)
@@ -1312,6 +1312,8 @@ class MultipurposeBot:
                                 db.clear_warnings(chat.id, user.id)
                         except Exception as e:
                             logger.warning(f"auto mute failed: {e}")
+            except Exception:
+                pass
 
         except Exception as e:
             logger.error(f"group_message_handler error: {e}")
