@@ -1285,15 +1285,29 @@ class MultipurposeBot:
                     window.append(now)
                     self._flood_window[key] = window
                     if len(window) > threshold:
-                        # Delete and warn
-                            can_add_web_page_previews=False,
-                        )
+                        # Exceeded flood threshold: delete and apply action (mute)
                         try:
+                            if message:
+                                try:
+                                    await context.bot.delete_message(chat.id, message.message_id)
+                                except Exception:
+                                    pass
+                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
+                            until = datetime.utcnow() + timedelta(minutes=minutes)
+                            auto_ban = int(gs.get('auto_ban_on_repeat', 1) or 1)
+                            reset_on_mute = int(gs.get('strikes_reset_on_mute', 1) or 1)
+                            perms = ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_polls=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False,
+                            )
                             await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
                             if auto_ban:
-                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {gs['mute_minutes_default']} minutes. Next time will result in a ban.")
+                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {minutes} minutes. Next time will result in a ban.")
                             else:
-                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {gs['mute_minutes_default']} minutes.")
+                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {minutes} minutes.")
                             if reset_on_mute:
                                 db.clear_warnings(chat.id, user.id)
                         except Exception as e:
