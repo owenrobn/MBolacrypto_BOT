@@ -155,6 +155,12 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('tagactives', self.tagactives_command))
         application.add_handler(CommandHandler('groupconfig', self.group_config_command))
         application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
+        # Media locks and logging configuration
+        application.add_handler(CommandHandler('lock', self.lock_command))
+        application.add_handler(CommandHandler('lockall', self.lockall_command))
+        application.add_handler(CommandHandler('setlogchat', self.setlogchat_command))
+        application.add_handler(CommandHandler('clearlogchat', self.clearlogchat_command))
+        application.add_handler(CommandHandler('settings', self.settings_command))
 
         # Callbacks and messages
         application.add_handler(CallbackQueryHandler(self.button_handler))
@@ -1995,6 +2001,124 @@ class MultipurposeBot:
         db.set_group_setting(chat_id, 'strikes_reset_on_mute', val)
         await update.message.reply_text(f"Reset warnings after mute: {'ON' if val else 'OFF'}")
 
+    async def settings_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        gs = db.get_group_settings(chat.id)
+        lines = [
+            '⚙️ Group Settings',
+            f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}",
+            f"Warn threshold: {gs.get('warn_threshold',3)}",
+            f"Default mute: {gs.get('mute_minutes_default',10)} min",
+            f"Auto-ban repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}",
+            f"Reset warns on mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}",
+            '— Locks —',
+            f"Photos: {'ON' if gs.get('lock_photos',0) else 'OFF'}",
+            f"Videos: {'ON' if gs.get('lock_videos',0) else 'OFF'}",
+            f"GIFs: {'ON' if gs.get('lock_gifs',0) else 'OFF'}",
+            f"Stickers: {'ON' if gs.get('lock_stickers',0) else 'OFF'}",
+            f"Documents: {'ON' if gs.get('lock_documents',0) else 'OFF'}",
+            f"Voice: {'ON' if gs.get('lock_voice',0) else 'OFF'}",
+            f"Audio: {'ON' if gs.get('lock_audio',0) else 'OFF'}",
+            f"Forwards: {'ON' if gs.get('lock_forwards',0) else 'OFF'}",
+            f"Log chat: {gs.get('log_chat_id') if gs.get('log_chat_id') is not None else 'None'}",
+        ]
+        await update.message.reply_text("\n".join(lines))
+
+    async def setlogchat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        issuer = update.effective_user.id if update.effective_user else 0
+        if not await self._is_group_admin(context.bot, chat.id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        # /setlogchat [chat_id|this]
+        val = None
+        if context.args:
+            arg = context.args[0].strip().lower()
+            if arg == 'this':
+                val = chat.id
+            else:
+                try:
+                    val = int(arg)
+                except Exception:
+                    await update.message.reply_text('Usage: /setlogchat <chat_id|this>')
+                    return
+        else:
+            val = chat.id
+        db.set_group_setting(chat.id, 'log_chat_id', val)
+        await update.message.reply_text(f'Log chat set to: {val}')
+
+    async def clearlogchat_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        issuer = update.effective_user.id if update.effective_user else 0
+        if not await self._is_group_admin(context.bot, chat.id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        db.set_group_setting(chat.id, 'log_chat_id', None)
+        await update.message.reply_text('Log chat cleared.')
+
+    def _normalize_lock_key(self, t: str) -> str | None:
+        t = (t or '').strip().lower()
+        mapping = {
+            'photo': 'lock_photos', 'photos': 'lock_photos',
+            'video': 'lock_videos', 'videos': 'lock_videos',
+            'gif': 'lock_gifs', 'gifs': 'lock_gifs', 'animation': 'lock_gifs',
+            'sticker': 'lock_stickers', 'stickers': 'lock_stickers',
+            'document': 'lock_documents', 'documents': 'lock_documents', 'doc': 'lock_documents',
+            'voice': 'lock_voice', 'ptt': 'lock_voice',
+            'audio': 'lock_audio', 'music': 'lock_audio',
+            'forward': 'lock_forwards', 'forwards': 'lock_forwards', 'fw': 'lock_forwards',
+        }
+        return mapping.get(t)
+
+    async def lock_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group. Usage: /lock <type> on|off')
+            return
+        issuer = update.effective_user.id if update.effective_user else 0
+        if not await self._is_group_admin(context.bot, chat.id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        if len(context.args) < 2:
+            await update.message.reply_text('Usage: /lock <photos|videos|gifs|stickers|documents|voice|audio|forwards> <on|off>')
+            return
+        key = self._normalize_lock_key(context.args[0])
+        if not key:
+            await update.message.reply_text('Unknown type. Allowed: photos, videos, gifs, stickers, documents, voice, audio, forwards')
+            return
+        val = 1 if context.args[1].lower() == 'on' else 0
+        db.set_group_setting(chat.id, key, val)
+        await update.message.reply_text(f"{key.replace('lock_','').capitalize()} lock: {'ON' if val else 'OFF'}")
+
+    async def lockall_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group. Usage: /lockall on|off')
+            return
+        issuer = update.effective_user.id if update.effective_user else 0
+        if not await self._is_group_admin(context.bot, chat.id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        if not context.args or context.args[0].lower() not in ('on','off'):
+            await update.message.reply_text('Usage: /lockall on|off')
+            return
+        val = 1 if context.args[0].lower() == 'on' else 0
+        for key in ('lock_photos','lock_videos','lock_gifs','lock_stickers','lock_documents','lock_voice','lock_audio','lock_forwards'):
+            try:
+                db.set_group_setting(chat.id, key, val)
+            except Exception:
+                pass
+        await update.message.reply_text(f"All media locks: {'ON' if val else 'OFF'}")
+
     def _render_group_config_kb(self, gs: dict) -> InlineKeyboardMarkup:
         kb: List[List[InlineKeyboardButton]] = []
         kb.append([
@@ -2109,6 +2233,55 @@ class MultipurposeBot:
                                     db.clear_warnings(chat.id, user.id)
                             except Exception as e:
                                 logger.warning(f"auto mute failed: {e}")
+            # Media locks enforcement
+            if message and user:
+                try:
+                    is_admin = await self._is_group_admin(context.bot, chat.id, user.id)
+                except Exception:
+                    is_admin = False
+                if not is_admin:
+                    # Determine media type and corresponding lock key
+                    media_checks = [
+                        ('lock_photos', bool(getattr(message, 'photo', None))),
+                        ('lock_videos', bool(getattr(message, 'video', None))),
+                        ('lock_gifs', bool(getattr(message, 'animation', None))),
+                        ('lock_stickers', bool(getattr(message, 'sticker', None))),
+                        ('lock_documents', bool(getattr(message, 'document', None))),
+                        ('lock_voice', bool(getattr(message, 'voice', None))),
+                        ('lock_audio', bool(getattr(message, 'audio', None))),
+                        ('lock_forwards', bool(getattr(message, 'forward_date', None)) or bool(getattr(message, 'forward_origin', None))),
+                    ]
+                    for key, present in media_checks:
+                        if present and gs.get(key, 0):
+                            try:
+                                await context.bot.delete_message(chat.id, message.message_id)
+                            except Exception:
+                                pass
+                            # Optionally warn on media violations
+                            try:
+                                count = db.increment_warning(chat.id, user.id, reason=key.replace('lock_',''))
+                                wt = gs.get('warn_threshold', 3)
+                                await context.bot.send_message(chat.id, f"⚠️ This media is locked ({key.replace('lock_','')}). Warning {count}/{wt}.")
+                                if count >= wt:
+                                    minutes = int(gs.get('mute_minutes_default', 10) or 10)
+                                    until = datetime.utcnow() + timedelta(minutes=minutes)
+                                    perms = ChatPermissions(
+                                        can_send_messages=False,
+                                        can_send_media_messages=False,
+                                        can_send_polls=False,
+                                        can_send_other_messages=False,
+                                        can_add_web_page_previews=False,
+                                    )
+                                    try:
+                                        await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
+                                        await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
+                                        if gs.get('strikes_reset_on_mute', 1):
+                                            db.clear_warnings(chat.id, user.id)
+                                    except Exception as e:
+                                        logger.warning(f"auto mute failed: {e}")
+                            except Exception:
+                                pass
+                            break
         except Exception as e:
             logger.warning(f"group_message_handler error: {e}")
 
