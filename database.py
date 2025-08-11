@@ -110,6 +110,16 @@ class Database:
                     mute_minutes_default INTEGER DEFAULT 10,
                     auto_ban_on_repeat INTEGER DEFAULT 1,
                     strikes_reset_on_mute INTEGER DEFAULT 1,
+                    anti_flood_enabled INTEGER DEFAULT 0,
+                    flood_count_threshold INTEGER DEFAULT 5,
+                    flood_interval_secs INTEGER DEFAULT 10,
+                    lock_media INTEGER DEFAULT 0,
+                    welcome_enabled INTEGER DEFAULT 1,
+                    welcome_text TEXT,
+                    goodbye_enabled INTEGER DEFAULT 0,
+                    goodbye_text TEXT,
+                    rules_text TEXT,
+                    logging_enabled INTEGER DEFAULT 1,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -122,6 +132,26 @@ class Database:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN auto_ban_on_repeat INTEGER DEFAULT 1")
                 if 'strikes_reset_on_mute' not in gcols:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN strikes_reset_on_mute INTEGER DEFAULT 1")
+                if 'anti_flood_enabled' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN anti_flood_enabled INTEGER DEFAULT 0")
+                if 'flood_count_threshold' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN flood_count_threshold INTEGER DEFAULT 5")
+                if 'flood_interval_secs' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN flood_interval_secs INTEGER DEFAULT 10")
+                if 'lock_media' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_media INTEGER DEFAULT 0")
+                if 'welcome_enabled' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN welcome_enabled INTEGER DEFAULT 1")
+                if 'welcome_text' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN welcome_text TEXT")
+                if 'goodbye_enabled' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN goodbye_enabled INTEGER DEFAULT 0")
+                if 'goodbye_text' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN goodbye_text TEXT")
+                if 'rules_text' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN rules_text TEXT")
+                if 'logging_enabled' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN logging_enabled INTEGER DEFAULT 1")
             except Exception:
                 pass
             
@@ -155,6 +185,31 @@ class Database:
                     user_id INTEGER,
                     last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     PRIMARY KEY (chat_id, user_id)
+                )
+            ''')
+
+            # Logs table for admin audit
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER,
+                    user_id INTEGER,
+                    action TEXT,
+                    details TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # Reports table for /report
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS reports (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER,
+                    reporter_id INTEGER,
+                    target_id INTEGER,
+                    message_id INTEGER,
+                    reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
@@ -512,16 +567,26 @@ class Database:
     def get_group_settings(self, chat_id: int):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute FROM group_settings WHERE chat_id = ?', (chat_id,))
+            cursor.execute('''
+                SELECT chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
+                       anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
+                       welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled
+                FROM group_settings WHERE chat_id = ?
+            ''', (chat_id,))
             row = cursor.fetchone()
             if not row:
                 # Initialize defaults
                 cursor.execute('''
-                    INSERT OR IGNORE INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute, updated_at)
-                    VALUES (?, 0, 3, 10, 1, 1, CURRENT_TIMESTAMP)
+                    INSERT OR IGNORE INTO group_settings (
+                        chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
+                        anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
+                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, updated_at)
+                    VALUES (?, 0, 3, 10, 1, 1, 0, 5, 10, 0, 1, NULL, 0, NULL, NULL, 1, CURRENT_TIMESTAMP)
                 ''', (chat_id,))
                 conn.commit()
-                return {"chat_id": chat_id, "anti_links": 0, "warn_threshold": 3, "mute_minutes_default": 10, "auto_ban_on_repeat": 1, "strikes_reset_on_mute": 1}
+                return {"chat_id": chat_id, "anti_links": 0, "warn_threshold": 3, "mute_minutes_default": 10, "auto_ban_on_repeat": 1, "strikes_reset_on_mute": 1,
+                        "anti_flood_enabled": 0, "flood_count_threshold": 5, "flood_interval_secs": 10, "lock_media": 0,
+                        "welcome_enabled": 1, "welcome_text": None, "goodbye_enabled": 0, "goodbye_text": None, "rules_text": None, "logging_enabled": 1}
             return {
                 "chat_id": row[0],
                 "anti_links": int(row[1]),
@@ -529,10 +594,22 @@ class Database:
                 "mute_minutes_default": int(row[3]),
                 "auto_ban_on_repeat": int(row[4]) if row[4] is not None else 1,
                 "strikes_reset_on_mute": int(row[5]) if row[5] is not None else 1,
+                "anti_flood_enabled": int(row[6]) if row[6] is not None else 0,
+                "flood_count_threshold": int(row[7]) if row[7] is not None else 5,
+                "flood_interval_secs": int(row[8]) if row[8] is not None else 10,
+                "lock_media": int(row[9]) if row[9] is not None else 0,
+                "welcome_enabled": int(row[10]) if row[10] is not None else 1,
+                "welcome_text": row[11],
+                "goodbye_enabled": int(row[12]) if row[12] is not None else 0,
+                "goodbye_text": row[13],
+                "rules_text": row[14],
+                "logging_enabled": int(row[15]) if row[15] is not None else 1,
             }
 
     def set_group_setting(self, chat_id: int, key: str, value) -> None:
-        if key not in {"anti_links", "warn_threshold", "mute_minutes_default", "auto_ban_on_repeat", "strikes_reset_on_mute"}:
+        if key not in {"anti_links", "warn_threshold", "mute_minutes_default", "auto_ban_on_repeat", "strikes_reset_on_mute",
+                       "anti_flood_enabled", "flood_count_threshold", "flood_interval_secs", "lock_media",
+                       "welcome_enabled", "welcome_text", "goodbye_enabled", "goodbye_text", "rules_text", "logging_enabled"}:
             raise ValueError("Invalid group setting key")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -540,10 +617,25 @@ class Database:
             if cursor.rowcount == 0:
                 # ensure row exists
                 cursor.execute('''
-                    INSERT INTO group_settings (chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    INSERT INTO group_settings (
+                        chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
+                        anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
+                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, 0, 5, 10, 0, 1, NULL, 0, NULL, NULL, 1, CURRENT_TIMESTAMP)
                 ''', (chat_id, 0, 3, 10, 1, 1))
                 cursor.execute(f'''UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?''', (value, chat_id))
+            conn.commit()
+
+    def add_log(self, chat_id: int, user_id: int | None, action: str, details: str | None = None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO logs (chat_id, user_id, action, details) VALUES (?, ?, ?, ?)', (chat_id, user_id, action, details))
+            conn.commit()
+
+    def add_report(self, chat_id: int, reporter_id: int, target_id: int | None, message_id: int | None, reason: str | None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO reports (chat_id, reporter_id, target_id, message_id, reason) VALUES (?, ?, ?, ?, ?)', (chat_id, reporter_id, target_id, message_id, reason))
             conn.commit()
 
     def increment_warning(self, chat_id: int, user_id: int, reason: str | None = None) -> int:
