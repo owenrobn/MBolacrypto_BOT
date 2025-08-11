@@ -114,12 +114,21 @@ class Database:
                     flood_count_threshold INTEGER DEFAULT 5,
                     flood_interval_secs INTEGER DEFAULT 10,
                     lock_media INTEGER DEFAULT 0,
+                    lock_photos INTEGER DEFAULT 0,
+                    lock_videos INTEGER DEFAULT 0,
+                    lock_gifs INTEGER DEFAULT 0,
+                    lock_stickers INTEGER DEFAULT 0,
+                    lock_documents INTEGER DEFAULT 0,
+                    lock_voice INTEGER DEFAULT 0,
+                    lock_audio INTEGER DEFAULT 0,
+                    lock_forwards INTEGER DEFAULT 0,
                     welcome_enabled INTEGER DEFAULT 1,
                     welcome_text TEXT,
                     goodbye_enabled INTEGER DEFAULT 0,
                     goodbye_text TEXT,
                     rules_text TEXT,
                     logging_enabled INTEGER DEFAULT 1,
+                    log_chat_id INTEGER,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -140,6 +149,22 @@ class Database:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN flood_interval_secs INTEGER DEFAULT 10")
                 if 'lock_media' not in gcols:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_media INTEGER DEFAULT 0")
+                if 'lock_photos' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_photos INTEGER DEFAULT 0")
+                if 'lock_videos' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_videos INTEGER DEFAULT 0")
+                if 'lock_gifs' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_gifs INTEGER DEFAULT 0")
+                if 'lock_stickers' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_stickers INTEGER DEFAULT 0")
+                if 'lock_documents' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_documents INTEGER DEFAULT 0")
+                if 'lock_voice' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_voice INTEGER DEFAULT 0")
+                if 'lock_audio' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_audio INTEGER DEFAULT 0")
+                if 'lock_forwards' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN lock_forwards INTEGER DEFAULT 0")
                 if 'welcome_enabled' not in gcols:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN welcome_enabled INTEGER DEFAULT 1")
                 if 'welcome_text' not in gcols:
@@ -152,6 +177,8 @@ class Database:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN rules_text TEXT")
                 if 'logging_enabled' not in gcols:
                     cursor.execute("ALTER TABLE group_settings ADD COLUMN logging_enabled INTEGER DEFAULT 1")
+                if 'log_chat_id' not in gcols:
+                    cursor.execute("ALTER TABLE group_settings ADD COLUMN log_chat_id INTEGER")
             except Exception:
                 pass
             
@@ -570,66 +597,97 @@ class Database:
             cursor.execute('''
                 SELECT chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
                        anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
-                       welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled
+                       lock_photos, lock_videos, lock_gifs, lock_stickers, lock_documents, lock_voice, lock_audio, lock_forwards,
+                       welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, log_chat_id
                 FROM group_settings WHERE chat_id = ?
             ''', (chat_id,))
             row = cursor.fetchone()
             if not row:
-                # Initialize defaults
+                # Ensure a default row exists then return defaults
                 cursor.execute('''
                     INSERT OR IGNORE INTO group_settings (
                         chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
                         anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
-                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, updated_at)
-                    VALUES (?, 0, 3, 10, 1, 1, 0, 5, 10, 0, 1, NULL, 0, NULL, NULL, 1, CURRENT_TIMESTAMP)
+                        lock_photos, lock_videos, lock_gifs, lock_stickers, lock_documents, lock_voice, lock_audio, lock_forwards,
+                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, log_chat_id, updated_at)
+                    VALUES (?, 0, 3, 10, 1, 1, 0, 5, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, NULL, 0, NULL, NULL, 1, NULL, CURRENT_TIMESTAMP)
                 ''', (chat_id,))
                 conn.commit()
-                return {"chat_id": chat_id, "anti_links": 0, "warn_threshold": 3, "mute_minutes_default": 10, "auto_ban_on_repeat": 1, "strikes_reset_on_mute": 1,
-                        "anti_flood_enabled": 0, "flood_count_threshold": 5, "flood_interval_secs": 10, "lock_media": 0,
-                        "welcome_enabled": 1, "welcome_text": None, "goodbye_enabled": 0, "goodbye_text": None, "rules_text": None, "logging_enabled": 1}
+                return {
+                    "chat_id": chat_id,
+                    "anti_links": 0,
+                    "warn_threshold": 3,
+                    "mute_minutes_default": 10,
+                    "auto_ban_on_repeat": 1,
+                    "strikes_reset_on_mute": 1,
+                    "anti_flood_enabled": 0,
+                    "flood_count_threshold": 5,
+                    "flood_interval_secs": 10,
+                    "lock_media": 0,
+                    "lock_photos": 0,
+                    "lock_videos": 0,
+                    "lock_gifs": 0,
+                    "lock_stickers": 0,
+                    "lock_documents": 0,
+                    "lock_voice": 0,
+                    "lock_audio": 0,
+                    "lock_forwards": 0,
+                    "welcome_enabled": 1,
+                    "welcome_text": None,
+                    "goodbye_enabled": 0,
+                    "goodbye_text": None,
+                    "rules_text": None,
+                    "logging_enabled": 1,
+                    "log_chat_id": None,
+                }
             return {
-                "chat_id": row[0],
-                "anti_links": int(row[1]),
-                "warn_threshold": int(row[2]),
-                "mute_minutes_default": int(row[3]),
+                "chat_id": int(row[0]),
+                "anti_links": int(row[1]) if row[1] is not None else 0,
+                "warn_threshold": int(row[2]) if row[2] is not None else 3,
+                "mute_minutes_default": int(row[3]) if row[3] is not None else 10,
                 "auto_ban_on_repeat": int(row[4]) if row[4] is not None else 1,
                 "strikes_reset_on_mute": int(row[5]) if row[5] is not None else 1,
                 "anti_flood_enabled": int(row[6]) if row[6] is not None else 0,
                 "flood_count_threshold": int(row[7]) if row[7] is not None else 5,
                 "flood_interval_secs": int(row[8]) if row[8] is not None else 10,
                 "lock_media": int(row[9]) if row[9] is not None else 0,
-                "welcome_enabled": int(row[10]) if row[10] is not None else 1,
-                "welcome_text": row[11],
-                "goodbye_enabled": int(row[12]) if row[12] is not None else 0,
-                "goodbye_text": row[13],
-                "rules_text": row[14],
-                "logging_enabled": int(row[15]) if row[15] is not None else 1,
+                "lock_photos": int(row[10]) if row[10] is not None else 0,
+                "lock_videos": int(row[11]) if row[11] is not None else 0,
+                "lock_gifs": int(row[12]) if row[12] is not None else 0,
+                "lock_stickers": int(row[13]) if row[13] is not None else 0,
+                "lock_documents": int(row[14]) if row[14] is not None else 0,
+                "lock_voice": int(row[15]) if row[15] is not None else 0,
+                "lock_audio": int(row[16]) if row[16] is not None else 0,
+                "lock_forwards": int(row[17]) if row[17] is not None else 0,
+                "welcome_enabled": int(row[18]) if row[18] is not None else 1,
+                "welcome_text": row[19],
+                "goodbye_enabled": int(row[20]) if row[20] is not None else 0,
+                "goodbye_text": row[21],
+                "rules_text": row[22],
+                "logging_enabled": int(row[23]) if row[23] is not None else 1,
+                "log_chat_id": int(row[24]) if row[24] is not None else None,
             }
 
     def set_group_setting(self, chat_id: int, key: str, value) -> None:
         if key not in {"anti_links", "warn_threshold", "mute_minutes_default", "auto_ban_on_repeat", "strikes_reset_on_mute",
                        "anti_flood_enabled", "flood_count_threshold", "flood_interval_secs", "lock_media",
-                       "welcome_enabled", "welcome_text", "goodbye_enabled", "goodbye_text", "rules_text", "logging_enabled"}:
+                       "lock_photos", "lock_videos", "lock_gifs", "lock_stickers", "lock_documents", "lock_voice", "lock_audio", "lock_forwards",
+                       "welcome_enabled", "welcome_text", "goodbye_enabled", "goodbye_text", "rules_text", "logging_enabled", "log_chat_id"}:
             raise ValueError("Invalid group setting key")
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute(f'''UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?''', (value, chat_id))
-            if cursor.rowcount == 0:
-                # ensure row exists
+            cursor.execute('SELECT 1 FROM group_settings WHERE chat_id = ?', (chat_id,))
+            exists = cursor.fetchone() is not None
+            if not exists:
                 cursor.execute('''
                     INSERT INTO group_settings (
                         chat_id, anti_links, warn_threshold, mute_minutes_default, auto_ban_on_repeat, strikes_reset_on_mute,
                         anti_flood_enabled, flood_count_threshold, flood_interval_secs, lock_media,
-                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, 5, 10, 0, 1, NULL, 0, NULL, NULL, 1, CURRENT_TIMESTAMP)
-                ''', (chat_id, 0, 3, 10, 1, 1))
-                cursor.execute(f'''UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?''', (value, chat_id))
-            conn.commit()
-
-    def add_log(self, chat_id: int, user_id: int | None, action: str, details: str | None = None) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO logs (chat_id, user_id, action, details) VALUES (?, ?, ?, ?)', (chat_id, user_id, action, details))
+                        lock_photos, lock_videos, lock_gifs, lock_stickers, lock_documents, lock_voice, lock_audio, lock_forwards,
+                        welcome_enabled, welcome_text, goodbye_enabled, goodbye_text, rules_text, logging_enabled, log_chat_id, updated_at)
+                    VALUES (?, 0, 3, 10, 1, 1, 0, 5, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, NULL, 0, NULL, NULL, 1, NULL, CURRENT_TIMESTAMP)
+                ''', (chat_id,))
+            cursor.execute(f'''UPDATE group_settings SET {key} = ?, updated_at = CURRENT_TIMESTAMP WHERE chat_id = ?''', (value, chat_id))
             conn.commit()
 
     def add_report(self, chat_id: int, reporter_id: int, target_id: int | None, message_id: int | None, reason: str | None) -> None:
