@@ -13,7 +13,7 @@ import telegram
 import telegram.ext as tg_ext
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 from dotenv import load_dotenv
 from database import Database
 
@@ -65,6 +65,9 @@ class MultipurposeBot:
         logger.info(f"python-telegram-bot version: {ptb_ver}")
         logger.info(f"telegram.ext module file: {getattr(tg_ext, '__file__', 'unknown')}")
 
+        # In-memory state for anti-flood tracking: (chat_id, user_id) -> list[timestamps]
+        self._flood_window: Dict[tuple, List[float]] = {}
+
     # ========== Helpers ==========
     def _back_main_markup(self, chat_type: str):
         """Inline back-to-main button for private chats only."""
@@ -73,6 +76,36 @@ class MultipurposeBot:
                 return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]])
         except Exception:
             pass
+        return None
+
+    async def _is_group_admin(self, bot, chat_id: int, user_id: int) -> bool:
+        """Return True if user_id is an admin of chat_id."""
+        try:
+            admins = await bot.get_chat_administrators(chat_id)
+            return any(a.user and a.user.id == user_id for a in admins)
+        except Exception:
+            return False
+
+    def _parse_target_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Resolve target user from reply or first arg (user_id)."""
+        try:
+            if update.message and update.message.reply_to_message and update.message.reply_to_message.from_user:
+                return update.message.reply_to_message.from_user
+            if context.args:
+                arg = context.args[0]
+                try:
+                    uid = int(arg)
+                    # Build a lightweight user-like object
+                    class _U:
+                        def __init__(self, _id):
+                            self.id = _id
+                            self.first_name = None
+                            self.username = None
+                    return _U(uid)
+                except Exception:
+                    return None
+        except Exception:
+            return None
         return None
 
     # ========== Core run ==========
@@ -92,44 +125,46 @@ class MultipurposeBot:
             .build()
         )
 
-        # Commands
+        # Commands (referral + moderation core only)
         application.add_handler(CommandHandler('start', self.start))
         application.add_handler(CommandHandler('help', self.help_command))
         application.add_handler(CommandHandler('menu', self.menu_command))
-        application.add_handler(CommandHandler('tz', self.tz_command))
-        application.add_handler(CommandHandler('capital', self.capital_command))
-        application.add_handler(CommandHandler('weather', self.weather_command))
-        application.add_handler(CommandHandler('fancy', self.fancy_command))
-        application.add_handler(CommandHandler('join', self.join_command))
-        application.add_handler(CommandHandler('stop', self.stop_command))
-        application.add_handler(CommandHandler('broadcast', self.broadcast_command))
-        application.add_handler(CommandHandler('myid', self.myid_command))
-        application.add_handler(CommandHandler('admins', self.admins_command))
-        application.add_handler(CommandHandler('addadmin', self.addadmin_command))
-        application.add_handler(CommandHandler('rmadmin', self.rmadmin_command))
+        # Rules & report
+        application.add_handler(CommandHandler('rules', self.rules_command))
+        application.add_handler(CommandHandler('setrules', self.setrules_command))
+        application.add_handler(CommandHandler('report', self.report_command))
+        # Referral-specific commands
         application.add_handler(CommandHandler('end_event', self.end_event_command))
-        # Phase 2: Group moderation commands
-        application.add_handler(CommandHandler('antilinks', self.antilinks_command))
+        application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
+        # Moderation core
         application.add_handler(CommandHandler('warn', self.warn_command))
-        application.add_handler(CommandHandler('unwarn', self.unwarn_command))
         application.add_handler(CommandHandler('warnings', self.warnings_command))
         application.add_handler(CommandHandler('mute', self.mute_command))
         application.add_handler(CommandHandler('unmute', self.unmute_command))
-        application.add_handler(CommandHandler('tagactives', self.tagactives_command))
+        application.add_handler(CommandHandler('ban', self.ban_command))
+        application.add_handler(CommandHandler('tban', self.tban_command))
+        application.add_handler(CommandHandler('kick', self.kick_command))
+        application.add_handler(CommandHandler('purge', self.purge_command))
+        application.add_handler(CommandHandler('del', self.del_command))
+        # Moderation config
         application.add_handler(CommandHandler('setwarns', self.setwarns_command))
         application.add_handler(CommandHandler('setmute', self.setmute_command))
         application.add_handler(CommandHandler('setautoban', self.setautoban_command))
         application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command))
+        application.add_handler(CommandHandler('unwarn', self.unwarn_command))
+        application.add_handler(CommandHandler('tagactives', self.tagactives_command))
         application.add_handler(CommandHandler('groupconfig', self.group_config_command))
         application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
-        # Group leaderboard
-        application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
 
         # Callbacks and messages
         application.add_handler(CallbackQueryHandler(self.button_handler))
-        application.add_handler(MessageHandler(filters.PHOTO & filters.ChatType.PRIVATE, self.photo_to_sticker))
         # Group message monitor for moderation and activity tracking
-        application.add_handler(MessageHandler(filters.ChatType.GROUPS & (filters.TEXT | filters.CAPTION | filters.Entity('url') | filters.Entity('text_link')), self.group_message_handler))
+        application.add_handler(MessageHandler(
+            filters.ChatType.GROUPS & (filters.ALL),
+            self.group_message_handler
+        ))
+        # Member updates for welcome/goodbye
+        application.add_handler(ChatMemberHandler(self.chat_member_update, ChatMemberHandler.CHAT_MEMBER))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         application.add_error_handler(self.error_handler)
 
@@ -215,28 +250,8 @@ class MultipurposeBot:
 
             keyboard: List[List[InlineKeyboardButton]] = []
 
-            # Utilities section
-            keyboard.append([InlineKeyboardButton("🛠️ Utilities", callback_data="noop")])
-            keyboard.append([
-                InlineKeyboardButton("🕒 Timezone (/tz)", callback_data="help_tz"),
-                InlineKeyboardButton("🌦️ Weather", callback_data="help_weather")
-            ])
-            keyboard.append([
-                InlineKeyboardButton("🏙️ Capital", callback_data="help_capital"),
-                InlineKeyboardButton("✨ Fancy Text", callback_data="help_fancy")
-            ])
-
-            # Stickers
-            keyboard.append([InlineKeyboardButton("🩷 Stickers: send me a photo in private", callback_data="noop")])
-
             # Referral Center (consolidated)
             keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
-
-            # Admin section if authorized
-            if db.is_admin(user.id) or user.id in self.admin_ids:
-                keyboard.append([InlineKeyboardButton("🛡️ Admin", callback_data="noop")])
-                keyboard.append([InlineKeyboardButton("📣 Broadcast (/broadcast)", callback_data="help_broadcast")])
-                keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
 
             keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
 
@@ -252,15 +267,112 @@ class MultipurposeBot:
         except Exception as e:
             logger.error(f"/start error: {e}")
 
+    # ========== Rules & Reports ==========
+    async def rules_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if chat.type in ['group', 'supergroup']:
+            gs = db.get_group_settings(chat.id)
+            text = gs.get('rules_text') or "No rules set for this group yet. Admins can set with /setrules in a reply or with text."
+            await update.message.reply_text(text)
+        else:
+            await update.message.reply_text("Use this in a group to view that group's rules.")
+
+    async def setrules_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can set rules.")
+            return
+        # Allow setting via replied text or arguments
+        text = None
+        if update.message.reply_to_message and (update.message.reply_to_message.text or update.message.reply_to_message.caption):
+            text = update.message.reply_to_message.text or update.message.reply_to_message.caption
+        else:
+            text = ' '.join(context.args).strip()
+        if not text:
+            await update.message.reply_text("Usage: reply to a message with /setrules, or use /setrules <text>.")
+            return
+        db.set_group_setting(chat_id, 'rules_text', text)
+        db.add_log(chat_id, issuer, 'set_rules', f'len={len(text)}')
+        await update.message.reply_text("✅ Rules updated. Use /rules to view.")
+
+    async def report_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        reporter = update.effective_user
+        target_id = None
+        message_id = None
+        reason = ' '.join(context.args).strip() if context.args else None
+        if update.message.reply_to_message:
+            message_id = update.message.reply_to_message.message_id
+            if update.message.reply_to_message.from_user:
+                target_id = update.message.reply_to_message.from_user.id
+        db.add_report(chat_id, reporter.id, target_id, message_id, reason)
+        # Notify admins silently
+        try:
+            admins = await context.bot.get_chat_administrators(chat_id)
+            admin_ids = [a.user.id for a in admins]
+            note = f"🚩 Report from {reporter.first_name}"
+            if target_id:
+                note += f" against user {target_id}"
+            if reason:
+                note += f"\nReason: {reason}"
+            note += f"\nMessage ID: {message_id or 'n/a'}"
+            for uid in admin_ids[:10]:
+                try:
+                    await context.bot.send_message(uid, f"[Report] chat {chat_id}:\n{note}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        await update.message.reply_text("✅ Report submitted. Group admins have been notified.")
+
+    # ========== Member Updates (Welcome/Goodbye) ==========
+    async def chat_member_update(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        try:
+            chat = update.effective_chat
+            if chat.type not in ['group', 'supergroup']:
+                return
+            cmu = update.chat_member
+            if not cmu:
+                return
+            old = cmu.old_chat_member.status
+            new = cmu.new_chat_member.status
+            user = cmu.new_chat_member.user
+            gs = db.get_group_settings(chat.id)
+            # Joined
+            if old in ('left', 'kicked') and new in ('member', 'administrator'): 
+                if gs.get('welcome_enabled', 1):
+                    text = gs.get('welcome_text') or "Welcome, {name}!"
+                    text = text.replace('{name}', user.first_name or (user.username or str(user.id)))
+                    try:
+                        await context.bot.send_message(chat.id, text)
+                    except Exception:
+                        pass
+            # Left
+            if new in ('left', 'kicked'):
+                if gs.get('goodbye_enabled', 0):
+                    text = gs.get('goodbye_text') or "Goodbye, {name}!"
+                    text = text.replace('{name}', user.first_name or (user.username or str(user.id)))
+                    try:
+                        await context.bot.send_message(chat.id, text)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"chat_member_update error: {e}")
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "ℹ️ About This Bot\n\n"
-            "This is a multipurpose assistant bot with:\n"
-            "• Utilities: timezone (/tz), capitals (/capital), weather (/weather)\n"
-            "• Text fun: fancy text (/fancy)\n"
-            "• Stickers: send a photo in private chat to get a sticker\n"
-            "• Referral Events: create/join events, track referrals, view leaderboards\n\n"
-            "Use /start to open the menu and explore features. For referrals, grab your link from the menu and share it. If you host events, you can optionally set a Telegram group so referrals are redirected there."
+            "This bot currently provides:\n"
+            "• Referral Events: create/join events, track referrals, view leaderboards\n"
+            "• Group Moderation Core: warnings, mute/unmute, thresholds, anti-links, inline group config\n\n"
+            "Use /start to open the menu. Referral tools are inside the 🎯 Referral Center."
         )
         chat_type = update.effective_chat.type if update.effective_chat else 'private'
         markup = self._back_main_markup(chat_type)
@@ -274,28 +386,8 @@ class MultipurposeBot:
         """Render the main menu inline (without re-running /start)."""
         try:
             keyboard: List[List[InlineKeyboardButton]] = []
-            # Utilities
-            keyboard.append([InlineKeyboardButton("🛠️ Utilities", callback_data="noop")])
-            keyboard.append([
-                InlineKeyboardButton("🕒 Timezone (/tz)", callback_data="help_tz"),
-                InlineKeyboardButton("🌦️ Weather", callback_data="help_weather")
-            ])
-            keyboard.append([
-                InlineKeyboardButton("🏙️ Capital", callback_data="help_capital"),
-                InlineKeyboardButton("✨ Fancy Text", callback_data="help_fancy")
-            ])
-            # Stickers hint
-            keyboard.append([InlineKeyboardButton("🩷 Stickers: send me a photo in private", callback_data="noop")])
-            # Referral Center
+            # Referral Center only
             keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
-            # Admin
-            try:
-                if db.is_admin(user_id) or user_id in self.admin_ids:
-                    keyboard.append([InlineKeyboardButton("🛡️ Admin", callback_data="noop")])
-                    keyboard.append([InlineKeyboardButton("📣 Broadcast (/broadcast)", callback_data="help_broadcast")])
-                    keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
-            except Exception:
-                pass
             keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
             await query.edit_message_text("Main Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
         except Exception as e:
@@ -712,10 +804,8 @@ class MultipurposeBot:
     async def show_help(self, query):
         help_msg = (
             "ℹ️ About This Bot\n\n"
-            "• Utilities: /tz, /capital, /weather\n"
-            "• Fancy text: /fancy\n"
-            "• Stickers: send a photo to me in private\n"
             "• Referral Events: create events, set group links, track referrals\n"
+            "• Group Moderation Core: warn/mute/unmute/ban/kick, anti-links, thresholds, inline config (/groupconfig)\n"
         )
         await query.edit_message_text(help_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]))
 
@@ -959,25 +1049,164 @@ class MultipurposeBot:
         chat_id = update.effective_chat.id
         issuer = update.effective_user.id
         if not await self._is_group_admin(context.bot, chat_id, issuer):
-            await update.message.reply_text("Only admins can unmute.")
+            await update.message.reply_text("Only admins can unmute members.")
             return
         target = self._parse_target_user(update, context)
         if not target:
-            await update.message.reply_text("Reply or provide user_id. Usage: /unmute (reply) or /unmute <user_id>")
+            await update.message.reply_text("Reply to a user or provide a username/ID.")
             return
-        perms = ChatPermissions(
-            can_send_messages=True,
-            can_send_media_messages=True,
-            can_send_polls=True,
-            can_send_other_messages=True,
-            can_add_web_page_previews=True,
-        )
         try:
+            perms = ChatPermissions(
+                can_send_messages=True,
+                can_send_media_messages=True,
+                can_send_other_messages=True,
+                can_add_web_page_previews=True,
+            )
             await context.bot.restrict_chat_member(chat_id, target.id, permissions=perms)
-            await update.message.reply_text(f"🔊 Unmuted {getattr(target, 'first_name', target.id)}.")
+            await update.message.reply_text(f"🔈 Unmuted {getattr(target, 'first_name', target.id)}")
         except Exception as e:
-            logger.error(f"unmute failed: {e}")
-            await update.message.reply_text("Failed to unmute user. I need admin rights.")
+            logger.warning(f"unmute failed: {e}")
+            await update.message.reply_text("Failed to unmute.")
+
+    async def ban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can ban members.")
+            return
+        target = self._parse_target_user(update, context)
+        if not target:
+            await update.message.reply_text("Reply to a user or provide a username/ID.")
+            return
+        try:
+            await context.bot.ban_chat_member(chat_id, target.id)
+            await update.message.reply_text(f"⛔ Banned {getattr(target, 'first_name', target.id)}")
+        except Exception as e:
+            logger.warning(f"ban failed: {e}")
+            await update.message.reply_text("Failed to ban.")
+
+    async def tban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can ban members.")
+            return
+        # Usage: /tban <minutes> [reply/target]
+        if not context.args:
+            await update.message.reply_text("Usage: /tban <minutes>")
+            return
+        try:
+            minutes = max(1, min(10080, int(context.args[0])))
+        except Exception:
+            await update.message.reply_text("Usage: /tban <minutes>")
+            return
+        target = self._parse_target_user(update, context)
+        if not target:
+            await update.message.reply_text("Reply to a user or provide a username/ID.")
+            return
+        until = datetime.utcnow() + timedelta(minutes=minutes)
+        try:
+            await context.bot.ban_chat_member(chat_id, target.id, until_date=until)
+            await update.message.reply_text(f"⛔ Temporarily banned {getattr(target, 'first_name', target.id)} for {minutes} minutes")
+        except Exception as e:
+            logger.warning(f"tban failed: {e}")
+            await update.message.reply_text("Failed to temp-ban.")
+
+    async def kick_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can kick members.")
+            return
+        target = self._parse_target_user(update, context)
+        if not target:
+            await update.message.reply_text("Reply or provide user_id. Usage: /kick (reply) or /kick <user_id>")
+            return
+        try:
+            # Kick = ban then unban
+            await context.bot.ban_chat_member(chat_id, target.id)
+            await context.bot.unban_chat_member(chat_id, target.id, only_if_banned=True)
+            await update.message.reply_text(f"👢 Kicked {getattr(target, 'first_name', target.id)}")
+        except Exception as e:
+            logger.warning(f"kick failed: {e}")
+            await update.message.reply_text("Failed to kick.")
+
+    async def purge_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        # If replying: delete range from replied message to command message. Else: delete N previous messages: /purge <count>
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can purge messages.")
+            return
+        try:
+            if update.message.reply_to_message:
+                start_id = update.message.reply_to_message.message_id
+                end_id = update.message.message_id
+                deleted = 0
+                for mid in range(start_id, end_id + 1):
+                    try:
+                        await context.bot.delete_message(chat_id, mid)
+                        deleted += 1
+                    except Exception:
+                        pass
+                await update.effective_chat.send_message(f"🧹 Purged {deleted} messages.")
+            else:
+                count = 0
+                if context.args:
+                    try:
+                        count = max(1, min(200, int(context.args[0])))
+                    except Exception:
+                        pass
+                if count <= 0:
+                    await update.message.reply_text("Reply to a message or use /purge <count>.")
+                    return
+                deleted = 0
+                current_id = update.message.message_id
+                for i in range(count + 1):  # include command message
+                    mid = current_id - i
+                    try:
+                        await context.bot.delete_message(chat_id, mid)
+                        deleted += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"purge failed: {e}")
+            try:
+                await update.message.reply_text("Failed to purge.")
+            except Exception:
+                pass
+
+    async def del_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            return
+        try:
+            if update.message.reply_to_message:
+                try:
+                    await context.bot.delete_message(chat_id, update.message.reply_to_message.message_id)
+                except Exception:
+                    pass
+            try:
+                await context.bot.delete_message(chat_id, update.message.message_id)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"del failed: {e}")
 
     async def tagactives_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type not in ['group', 'supergroup']:
@@ -1018,50 +1247,45 @@ class MultipurposeBot:
             if user:
                 db.record_activity(chat.id, user.id)
             gs = db.get_group_settings(chat.id)
-            if not gs['anti_links']:
-                return
-            # Allow admins to post links
-            if user and await self._is_group_admin(context.bot, chat.id, user.id):
-                return
             msg = update.effective_message
-            text = msg.text or msg.caption or ''
-            has_link = False
-            if msg.entities:
-                for ent in msg.entities:
-                    if ent.type in ['url', 'text_link']:
-                        has_link = True
-                        break
-            if not has_link and re.search(r"https?://|t\.me/|telegram\.me/", text, re.IGNORECASE):
-                has_link = True
-            if has_link:
-                try:
-                    await msg.delete()
-                except Exception:
-                    pass
-                count = db.increment_warning(chat.id, user.id, reason="Link detected")
-                gs = db.get_group_settings(chat.id)
-                await context.bot.send_message(chat_id=chat.id, text=f"⚠️ {user.first_name}: links are not allowed here. Warning {count}/{gs['warn_threshold']}")
-                if count >= gs['warn_threshold']:
-                    strikes = db.add_strike(chat.id, user.id)
-                    auto_ban = bool(gs.get('auto_ban_on_repeat', 1))
-                    reset_on_mute = bool(gs.get('strikes_reset_on_mute', 1))
-                    if auto_ban and strikes >= 2:
+
+            # Media locks: delete media if locked (except admins)
+            try:
+                if gs.get('lock_media', 0):
+                    is_admin = user and await self._is_group_admin(context.bot, chat.id, user.id)
+                    has_media = any([
+                        bool(getattr(msg, 'photo', None)),
+                        bool(getattr(msg, 'video', None)),
+                        bool(getattr(msg, 'animation', None)),
+                        bool(getattr(msg, 'document', None)),
+                        bool(getattr(msg, 'sticker', None)),
+                        bool(getattr(msg, 'voice', None)),
+                        bool(getattr(msg, 'audio', None)),
+                        bool(getattr(msg, 'video_note', None)),
+                    ])
+                    if has_media and not is_admin:
                         try:
-                            await context.bot.ban_chat_member(chat.id, user.id)
-                            await context.bot.send_message(chat_id=chat.id, text=f"🚫 {user.first_name} has been banned due to repeated violations.")
-                        except Exception as e:
-                            logger.warning(f"auto ban failed: {e}")
-                        try:
-                            db.clear_warnings(chat.id, user.id)
+                            await context.bot.delete_message(chat.id, msg.message_id)
                         except Exception:
                             pass
-                    else:
-                        until = datetime.utcnow() + timedelta(minutes=gs['mute_minutes_default'])
-                        perms = ChatPermissions(
-                            can_send_messages=False,
-                            can_send_media_messages=False,
-                            can_send_polls=False,
-                            can_send_other_messages=False,
+                        return
+            except Exception:
+                pass
+
+            # Anti-flood: track user message frequency
+            try:
+                if gs.get('anti_flood_enabled', 0) and user:
+                    key = (chat.id, user.id)
+                    now = datetime.utcnow().timestamp()
+                    window = self._flood_window.get(key, [])
+                    # keep only within interval
+                    interval = int(gs.get('flood_interval_secs', 10) or 10)
+                    threshold = int(gs.get('flood_count_threshold', 5) or 5)
+                    window = [t for t in window if now - t <= interval]
+                    window.append(now)
+                    self._flood_window[key] = window
+                    if len(window) > threshold:
+                        # Delete and warn
                             can_add_web_page_previews=False,
                         )
                         try:
@@ -1650,6 +1874,227 @@ class MultipurposeBot:
         except Exception as e:
             logger.error(f"end_event_command error: {e}")
             await update.message.reply_text("Error ending event. Please try again later.")
+
+    # ===== Missing Moderation Actions & Config =====
+    async def unmute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("Use this in a group.")
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text("Only admins can unmute.")
+            return
+        target = self._parse_target_user(update, context)
+        if not target:
+            await update.message.reply_text("Reply or provide user_id. Usage: /unmute (reply) or /unmute <user_id>")
+            return
+        perms = ChatPermissions(
+            can_send_messages=True,
+            can_send_media_messages=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+        )
+        try:
+            await context.bot.restrict_chat_member(chat_id, target.id, permissions=perms)
+            await update.message.reply_text(f"🔈 Unmuted {getattr(target, 'first_name', target.id)}")
+        except Exception as e:
+            logger.warning(f"unmute failed: {e}")
+            await update.message.reply_text("Failed to unmute. I need admin rights.")
+
+    async def setwarns_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        if not context.args:
+            gs = db.get_group_settings(chat_id)
+            await update.message.reply_text(f"Current warn threshold: {gs.get('warn_threshold',3)}")
+            return
+        try:
+            val = max(1, min(10, int(context.args[0])))
+            db.set_group_setting(chat_id, 'warn_threshold', val)
+            await update.message.reply_text(f"Warn threshold set to {val}.")
+        except Exception:
+            await update.message.reply_text('Usage: /setwarns <1-10>')
+
+    async def setmute_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        if not context.args:
+            gs = db.get_group_settings(chat_id)
+            await update.message.reply_text(f"Current mute minutes: {gs.get('mute_minutes_default',10)}")
+            return
+        try:
+            val = max(1, min(1440, int(context.args[0])))
+            db.set_group_setting(chat_id, 'mute_minutes_default', val)
+            await update.message.reply_text(f"Default mute set to {val} minutes.")
+        except Exception:
+            await update.message.reply_text('Usage: /setmute <minutes>')
+
+    async def setautoban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        val: int
+        if context.args and context.args[0].lower() in ('on','off'):
+            val = 1 if context.args[0].lower() == 'on' else 0
+        else:
+            gs = db.get_group_settings(chat_id)
+            val = 0 if gs.get('auto_ban_on_repeat',1) else 1
+        db.set_group_setting(chat_id, 'auto_ban_on_repeat', val)
+        await update.message.reply_text(f"Auto-ban on repeat: {'ON' if val else 'OFF'}")
+
+    async def setresetwarns_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('Use this in a group.')
+            return
+        chat_id = update.effective_chat.id
+        issuer = update.effective_user.id
+        if not await self._is_group_admin(context.bot, chat_id, issuer):
+            await update.message.reply_text('Admins only.')
+            return
+        val: int
+        if context.args and context.args[0].lower() in ('on','off'):
+            val = 1 if context.args[0].lower() == 'on' else 0
+        else:
+            gs = db.get_group_settings(chat_id)
+            val = 0 if gs.get('strikes_reset_on_mute',1) else 1
+        db.set_group_setting(chat_id, 'strikes_reset_on_mute', val)
+        await update.message.reply_text(f"Reset warnings after mute: {'ON' if val else 'OFF'}")
+
+    def _render_group_config_kb(self, gs: dict) -> InlineKeyboardMarkup:
+        kb: List[List[InlineKeyboardButton]] = []
+        kb.append([
+            InlineKeyboardButton(f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}", callback_data='gc:toggle:anti_links')
+        ])
+        kb.append([
+            InlineKeyboardButton("Warn -", callback_data='gc:dec:warn_threshold'),
+            InlineKeyboardButton(f"Warns: {gs.get('warn_threshold',3)}", callback_data='gc:noop'),
+            InlineKeyboardButton("Warn +", callback_data='gc:inc:warn_threshold'),
+        ])
+        kb.append([
+            InlineKeyboardButton("Mute -", callback_data='gc:dec:mute_minutes_default'),
+            InlineKeyboardButton(f"Mute: {gs.get('mute_minutes_default',10)}m", callback_data='gc:noop'),
+            InlineKeyboardButton("Mute +", callback_data='gc:inc:mute_minutes_default'),
+        ])
+        kb.append([
+            InlineKeyboardButton(f"Auto-ban: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}", callback_data='gc:toggle:auto_ban_on_repeat')
+        ])
+        kb.append([
+            InlineKeyboardButton(f"Reset warns: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}", callback_data='gc:toggle:strikes_reset_on_mute')
+        ])
+        return InlineKeyboardMarkup(kb)
+
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        query = update.callback_query
+        await query.answer()
+        data = query.data or ''
+        user_id = update.effective_user.id if update.effective_user else None
+        try:
+            if data == 'main_menu':
+                await self.show_main_menu(query, user_id)
+                return
+            if data == 'ref_center':
+                await self.show_referral_center(query, user_id)
+                return
+            if data == 'create_event':
+                await self.start_create_event(query, context)
+                return
+            if data == 'my_events':
+                await self.show_my_events(query, user_id)
+                return
+            if data.startswith('event_link_'):
+                try:
+                    event_id = int(data.split('_', 2)[2])
+                    await self.send_event_link(query, event_id)
+                except Exception:
+                    await query.reply_text('Error generating link.')
+                return
+            if data.startswith('event_'):
+                # Show event info/stats
+                try:
+                    event_id = int(data.split('_', 1)[1])
+                    await self.show_event_stats(query, event_id)
+                except Exception:
+                    await query.reply_text('Event not found.')
+                return
+            if data == 'skip_group_link':
+                await self.skip_group_link(query, context)
+                return
+            # Unknown -> ignore politely
+            await query.answer()
+        except Exception as e:
+            logger.error(f"button_handler error: {e}")
+
+    async def group_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        chat = update.effective_chat
+        if not chat or chat.type not in ['group', 'supergroup']:
+            return
+        message = update.effective_message
+        user = update.effective_user
+        # Record activity for tagactives
+        try:
+            if user:
+                db.record_activity(chat.id, user.id)
+        except Exception:
+            pass
+        # Anti-links
+        try:
+            gs = db.get_group_settings(chat.id)
+            anti = gs.get('anti_links', 0)
+            if anti and message:
+                text = (message.text or '') + '\n' + (message.caption or '')
+                has_link = False
+                if 't.me/' in text or 'http://' in text or 'https://' in text:
+                    has_link = True
+                # if Telegram entities parsed, Telegram may have already flagged links; simple text scan suffices
+                if has_link:
+                    # Allow admins
+                    if not await self._is_group_admin(context.bot, chat.id, user.id if user else 0):
+                        try:
+                            await context.bot.delete_message(chat.id, message.message_id)
+                        except Exception:
+                            pass
+                        # warn flow
+                        count = db.increment_warning(chat.id, user.id if user else 0, reason='link')
+                        wt = gs.get('warn_threshold', 3)
+                        await context.bot.send_message(chat.id, f"⚠️ Link not allowed. Warning {count}/{wt}.")
+                        if count >= wt:
+                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
+                            until = datetime.utcnow() + timedelta(minutes=minutes)
+                            perms = ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_polls=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False,
+                            )
+                            try:
+                                await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
+                                await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
+                                if gs.get('strikes_reset_on_mute', 1):
+                                    db.clear_warnings(chat.id, user.id)
+                            except Exception as e:
+                                logger.warning(f"auto mute failed: {e}")
+        except Exception as e:
+            logger.warning(f"group_message_handler error: {e}")
 
 
 if __name__ == "__main__":
