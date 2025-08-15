@@ -161,13 +161,17 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('setlogchat', self.setlogchat_command))
         application.add_handler(CommandHandler('clearlogchat', self.clearlogchat_command))
         application.add_handler(CommandHandler('settings', self.settings_command))
+        # Aliases
+        application.add_handler(CommandHandler('locks', self.settings_command))
+        application.add_handler(CommandHandler('setlog', self.setlogchat_command))
+        application.add_handler(CommandHandler('unsetlog', self.clearlogchat_command))
 
         # Callbacks and messages
         application.add_handler(CallbackQueryHandler(self.button_handler))
-        # Group message monitor for moderation and activity tracking
+        # Group message monitor for moderation and activity tracking (unified)
         application.add_handler(MessageHandler(
             filters.ChatType.GROUPS & (filters.ALL),
-            self.group_message_handler
+            self._group_message_handler_unified
         ))
         # Member updates for welcome/goodbye
         application.add_handler(ChatMemberHandler(self.chat_member_update, ChatMemberHandler.CHAT_MEMBER))
@@ -730,6 +734,130 @@ class MultipurposeBot:
             except Exception:
                 pass
 
+    async def _group_message_handler_unified(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Unified group message handler: records activity, enforces anti-links and per-media locks
+        with warning/mute escalation. Skips enforcement for group admins.
+        """
+        chat = update.effective_chat
+        if not chat or chat.type not in ["group", "supergroup"]:
+            return
+        message = update.effective_message
+        user = update.effective_user
+        if not message or not user:
+            return
+        # Record activity for tagactives
+        try:
+            db.record_activity(chat.id, user.id)
+        except Exception:
+            pass
+
+        gs = db.get_group_settings(chat.id)
+
+        # Helper: check if user is admin
+        try:
+            is_admin = await self._is_group_admin(context.bot, chat.id, user.id)
+        except Exception:
+            is_admin = False
+        if is_admin:
+            return  # Do not enforce against admins
+
+        # ========== Anti-links enforcement ==========
+        try:
+            if gs.get('anti_links', 0):
+                has_link = False
+                # Prefer Telegram's entity parsing for URLs
+                try:
+                    for ent in (message.entities or []):
+                        if ent.type in ("url", "text_link"):
+                            has_link = True
+                            break
+                except Exception:
+                    pass
+                # Fallback regex for common link patterns
+                if not has_link:
+                    text = (message.text or message.caption or "")
+                    if text:
+                        if re.search(r"(https?://|www\.|t\.me/)\S+", text, re.IGNORECASE):
+                            has_link = True
+                if has_link:
+                    try:
+                        await context.bot.delete_message(chat.id, message.message_id)
+                    except Exception:
+                        pass
+                    # warn and possibly mute/ban
+                    try:
+                        count = db.increment_warning(chat.id, user.id, reason='links')
+                        wt = int(gs.get('warn_threshold', 3) or 3)
+                        await context.bot.send_message(chat.id, f"⚠️ Links are not allowed. Warning {count}/{wt}.")
+                        if count >= wt:
+                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
+                            until = datetime.utcnow() + timedelta(minutes=minutes)
+                            perms = ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_polls=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False,
+                            )
+                            try:
+                                await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
+                                await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
+                                if gs.get('strikes_reset_on_mute', 1):
+                                    db.clear_warnings(chat.id, user.id)
+                            except Exception as e:
+                                logger.warning(f"auto mute failed: {e}")
+                    except Exception:
+                        pass
+                    return  # already handled as a violation
+        except Exception as e:
+            logger.warning(f"antilinks enforcement error: {e}")
+
+        # ========== Media locks enforcement ==========
+        try:
+            media_checks = [
+                ('lock_photos', bool(getattr(message, 'photo', None))),
+                ('lock_videos', bool(getattr(message, 'video', None))),
+                ('lock_gifs', bool(getattr(message, 'animation', None))),
+                ('lock_stickers', bool(getattr(message, 'sticker', None))),
+                ('lock_documents', bool(getattr(message, 'document', None))),
+                ('lock_voice', bool(getattr(message, 'voice', None))),
+                ('lock_audio', bool(getattr(message, 'audio', None))),
+                ('lock_forwards', bool(getattr(message, 'forward_date', None)) or bool(getattr(message, 'forward_origin', None))),
+            ]
+            for key, present in media_checks:
+                if present and gs.get(key, 0):
+                    try:
+                        await context.bot.delete_message(chat.id, message.message_id)
+                    except Exception:
+                        pass
+                    try:
+                        reason = key.replace('lock_', '')
+                        count = db.increment_warning(chat.id, user.id, reason=reason)
+                        wt = int(gs.get('warn_threshold', 3) or 3)
+                        await context.bot.send_message(chat.id, f"⚠️ {reason.capitalize()} are locked. Warning {count}/{wt}.")
+                        if count >= wt:
+                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
+                            until = datetime.utcnow() + timedelta(minutes=minutes)
+                            perms = ChatPermissions(
+                                can_send_messages=False,
+                                can_send_media_messages=False,
+                                can_send_polls=False,
+                                can_send_other_messages=False,
+                                can_add_web_page_previews=False,
+                            )
+                            try:
+                                await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
+                                await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
+                                if gs.get('strikes_reset_on_mute', 1):
+                                    db.clear_warnings(chat.id, user.id)
+                            except Exception as e:
+                                logger.warning(f"auto mute failed: {e}")
+                    except Exception:
+                        pass
+                    break
+        except Exception as e:
+            logger.warning(f"media locks enforcement error: {e}")
+
     # ========== Buttons / Flows ==========
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
@@ -1245,84 +1373,8 @@ class MultipurposeBot:
         await update.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     async def group_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            chat = update.effective_chat
-            if chat.type not in ['group', 'supergroup']:
-                return
-            user = update.effective_user
-            if user:
-                db.record_activity(chat.id, user.id)
-            gs = db.get_group_settings(chat.id)
-            msg = update.effective_message
-
-            # Media locks: delete media if locked (except admins)
-            try:
-                if gs.get('lock_media', 0):
-                    is_admin = user and await self._is_group_admin(context.bot, chat.id, user.id)
-                    has_media = any([
-                        bool(getattr(msg, 'photo', None)),
-                        bool(getattr(msg, 'video', None)),
-                        bool(getattr(msg, 'animation', None)),
-                        bool(getattr(msg, 'document', None)),
-                        bool(getattr(msg, 'sticker', None)),
-                        bool(getattr(msg, 'voice', None)),
-                        bool(getattr(msg, 'audio', None)),
-                        bool(getattr(msg, 'video_note', None)),
-                    ])
-                    if has_media and not is_admin:
-                        try:
-                            await context.bot.delete_message(chat.id, msg.message_id)
-                        except Exception:
-                            pass
-                        return
-            except Exception:
-                pass
-
-            # Anti-flood: track user message frequency
-            try:
-                if gs.get('anti_flood_enabled', 0) and user:
-                    key = (chat.id, user.id)
-                    now = datetime.utcnow().timestamp()
-                    window = self._flood_window.get(key, [])
-                    # keep only within interval
-                    interval = int(gs.get('flood_interval_secs', 10) or 10)
-                    threshold = int(gs.get('flood_count_threshold', 5) or 5)
-                    window = [t for t in window if now - t <= interval]
-                    window.append(now)
-                    self._flood_window[key] = window
-                    if len(window) > threshold:
-                        # Exceeded flood threshold: delete and apply action (mute)
-                        try:
-                            if msg:
-                                try:
-                                    await context.bot.delete_message(chat.id, msg.message_id)
-                                except Exception:
-                                    pass
-                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
-                            until = datetime.utcnow() + timedelta(minutes=minutes)
-                            auto_ban = int(gs.get('auto_ban_on_repeat', 1) or 1)
-                            reset_on_mute = int(gs.get('strikes_reset_on_mute', 1) or 1)
-                            perms = ChatPermissions(
-                                can_send_messages=False,
-                                can_send_media_messages=False,
-                                can_send_polls=False,
-                                can_send_other_messages=False,
-                                can_add_web_page_previews=False,
-                            )
-                            await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
-                            if auto_ban:
-                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {minutes} minutes. Next time will result in a ban.")
-                            else:
-                                await context.bot.send_message(chat_id=chat.id, text=f"🔇 {user.first_name} muted for {minutes} minutes.")
-                            if reset_on_mute:
-                                db.clear_warnings(chat.id, user.id)
-                        except Exception as e:
-                            logger.warning(f"auto mute failed: {e}")
-            except Exception:
-                pass
-
-        except Exception as e:
-            logger.error(f"group_message_handler error: {e}")
+        # Thin wrapper kept for backward references; delegates to unified handler.
+        return await self._group_message_handler_unified(update, context)
 
     async def setautoban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type not in ['group', 'supergroup']:
@@ -2140,6 +2192,25 @@ class MultipurposeBot:
         kb.append([
             InlineKeyboardButton(f"Reset warns: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}", callback_data='gc:toggle:strikes_reset_on_mute')
         ])
+        # Media locks rows
+        kb.append([
+            InlineKeyboardButton(f"Photos: {'ON' if gs.get('lock_photos',0) else 'OFF'}", callback_data='gc:toggle:lock_photos'),
+            InlineKeyboardButton(f"Videos: {'ON' if gs.get('lock_videos',0) else 'OFF'}", callback_data='gc:toggle:lock_videos'),
+            InlineKeyboardButton(f"GIFs: {'ON' if gs.get('lock_gifs',0) else 'OFF'}", callback_data='gc:toggle:lock_gifs'),
+        ])
+        kb.append([
+            InlineKeyboardButton(f"Stickers: {'ON' if gs.get('lock_stickers',0) else 'OFF'}", callback_data='gc:toggle:lock_stickers'),
+            InlineKeyboardButton(f"Docs: {'ON' if gs.get('lock_documents',0) else 'OFF'}", callback_data='gc:toggle:lock_documents'),
+            InlineKeyboardButton(f"Voice: {'ON' if gs.get('lock_voice',0) else 'OFF'}", callback_data='gc:toggle:lock_voice'),
+        ])
+        kb.append([
+            InlineKeyboardButton(f"Audio: {'ON' if gs.get('lock_audio',0) else 'OFF'}", callback_data='gc:toggle:lock_audio'),
+            InlineKeyboardButton(f"Forwards: {'ON' if gs.get('lock_forwards',0) else 'OFF'}", callback_data='gc:toggle:lock_forwards'),
+        ])
+        kb.append([
+            InlineKeyboardButton("Lock all ON", callback_data='gc:lockall:on'),
+            InlineKeyboardButton("Lock all OFF", callback_data='gc:lockall:off'),
+        ])
         return InlineKeyboardMarkup(kb)
 
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2184,106 +2255,8 @@ class MultipurposeBot:
             logger.error(f"button_handler error: {e}")
 
     async def group_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        chat = update.effective_chat
-        if not chat or chat.type not in ['group', 'supergroup']:
-            return
-        message = update.effective_message
-        user = update.effective_user
-        # Record activity for tagactives
-        try:
-            if user:
-                db.record_activity(chat.id, user.id)
-        except Exception:
-            pass
-        # Anti-links
-        try:
-            gs = db.get_group_settings(chat.id)
-            anti = gs.get('anti_links', 0)
-            if anti and message:
-                text = (message.text or '') + '\n' + (message.caption or '')
-                has_link = False
-                if 't.me/' in text or 'http://' in text or 'https://' in text:
-                    has_link = True
-                # if Telegram entities parsed, Telegram may have already flagged links; simple text scan suffices
-                if has_link:
-                    # Allow admins
-                    if not await self._is_group_admin(context.bot, chat.id, user.id if user else 0):
-                        try:
-                            await context.bot.delete_message(chat.id, message.message_id)
-                        except Exception:
-                            pass
-                        # warn flow
-                        count = db.increment_warning(chat.id, user.id if user else 0, reason='link')
-                        wt = gs.get('warn_threshold', 3)
-                        await context.bot.send_message(chat.id, f"⚠️ Link not allowed. Warning {count}/{wt}.")
-                        if count >= wt:
-                            minutes = int(gs.get('mute_minutes_default', 10) or 10)
-                            until = datetime.utcnow() + timedelta(minutes=minutes)
-                            perms = ChatPermissions(
-                                can_send_messages=False,
-                                can_send_media_messages=False,
-                                can_send_polls=False,
-                                can_send_other_messages=False,
-                                can_add_web_page_previews=False,
-                            )
-                            try:
-                                await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
-                                await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
-                                if gs.get('strikes_reset_on_mute', 1):
-                                    db.clear_warnings(chat.id, user.id)
-                            except Exception as e:
-                                logger.warning(f"auto mute failed: {e}")
-            # Media locks enforcement
-            if message and user:
-                try:
-                    is_admin = await self._is_group_admin(context.bot, chat.id, user.id)
-                except Exception:
-                    is_admin = False
-                if not is_admin:
-                    # Determine media type and corresponding lock key
-                    media_checks = [
-                        ('lock_photos', bool(getattr(message, 'photo', None))),
-                        ('lock_videos', bool(getattr(message, 'video', None))),
-                        ('lock_gifs', bool(getattr(message, 'animation', None))),
-                        ('lock_stickers', bool(getattr(message, 'sticker', None))),
-                        ('lock_documents', bool(getattr(message, 'document', None))),
-                        ('lock_voice', bool(getattr(message, 'voice', None))),
-                        ('lock_audio', bool(getattr(message, 'audio', None))),
-                        ('lock_forwards', bool(getattr(message, 'forward_date', None)) or bool(getattr(message, 'forward_origin', None))),
-                    ]
-                    for key, present in media_checks:
-                        if present and gs.get(key, 0):
-                            try:
-                                await context.bot.delete_message(chat.id, message.message_id)
-                            except Exception:
-                                pass
-                            # Optionally warn on media violations
-                            try:
-                                count = db.increment_warning(chat.id, user.id, reason=key.replace('lock_',''))
-                                wt = gs.get('warn_threshold', 3)
-                                await context.bot.send_message(chat.id, f"⚠️ This media is locked ({key.replace('lock_','')}). Warning {count}/{wt}.")
-                                if count >= wt:
-                                    minutes = int(gs.get('mute_minutes_default', 10) or 10)
-                                    until = datetime.utcnow() + timedelta(minutes=minutes)
-                                    perms = ChatPermissions(
-                                        can_send_messages=False,
-                                        can_send_media_messages=False,
-                                        can_send_polls=False,
-                                        can_send_other_messages=False,
-                                        can_add_web_page_previews=False,
-                                    )
-                                    try:
-                                        await context.bot.restrict_chat_member(chat.id, user.id, permissions=perms, until_date=until)
-                                        await context.bot.send_message(chat.id, f"🔇 Auto-muted for {minutes} minutes due to warnings.")
-                                        if gs.get('strikes_reset_on_mute', 1):
-                                            db.clear_warnings(chat.id, user.id)
-                                    except Exception as e:
-                                        logger.warning(f"auto mute failed: {e}")
-                            except Exception:
-                                pass
-                            break
-        except Exception as e:
-            logger.warning(f"group_message_handler error: {e}")
+        # Thin wrapper kept for backward references; delegates to unified handler.
+        return await self._group_message_handler_unified(update, context)
 
 
 if __name__ == "__main__":
