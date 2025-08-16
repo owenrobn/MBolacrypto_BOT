@@ -210,8 +210,35 @@ class Database:
                 CREATE TABLE IF NOT EXISTS recent_activity (
                     chat_id INTEGER,
                     user_id INTEGER,
-                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_active TIMESTAMP,
                     PRIMARY KEY (chat_id, user_id)
+                )
+            ''')
+
+            # Notes: per group saved notes (text or media via file_id)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS notes (
+                    chat_id INTEGER,
+                    name TEXT,
+                    content TEXT,
+                    file_id TEXT,
+                    content_type TEXT, 
+                    added_by INTEGER,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (chat_id, name)
+                )
+            ''')
+
+            # Filters: per group keyword triggers -> response (text or note reference)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS filters (
+                    chat_id INTEGER,
+                    trigger TEXT,
+                    response TEXT,
+                    note_name TEXT, 
+                    added_by INTEGER,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (chat_id, trigger)
                 )
             ''')
 
@@ -761,3 +788,73 @@ class Database:
                 ORDER BY last_active DESC
             ''', (chat_id, f'-{within_minutes} minutes'))
             return [r[0] for r in cursor.fetchall()]
+
+    # ===== Notes APIs =====
+    def save_note(self, chat_id: int, name: str, content: str | None, file_id: str | None, content_type: str | None, added_by: int | None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO notes (chat_id, name, content, file_id, content_type, added_by, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(chat_id, name) DO UPDATE SET content=excluded.content, file_id=excluded.file_id, content_type=excluded.content_type, added_by=excluded.added_by, updated_at=CURRENT_TIMESTAMP
+            ''', (chat_id, name, content, file_id, content_type, added_by))
+            conn.commit()
+
+    def get_note(self, chat_id: int, name: str):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT name, content, file_id, content_type FROM notes WHERE chat_id = ? AND name = ?', (chat_id, name))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return {
+                'name': row[0],
+                'content': row[1],
+                'file_id': row[2],
+                'content_type': row[3],
+            }
+
+    def list_notes(self, chat_id: int) -> List[str]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT name FROM notes WHERE chat_id = ? ORDER BY name COLLATE NOCASE', (chat_id,))
+            return [r[0] for r in cursor.fetchall()]
+
+    def delete_note(self, chat_id: int, name: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM notes WHERE chat_id = ? AND name = ?', (chat_id, name))
+            conn.commit()
+
+    # ===== Filters APIs =====
+    def add_filter(self, chat_id: int, trigger: str, response: str | None, note_name: str | None, added_by: int | None) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO filters (chat_id, trigger, response, note_name, added_by, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(chat_id, trigger) DO UPDATE SET response=excluded.response, note_name=excluded.note_name, added_by=excluded.added_by, updated_at=CURRENT_TIMESTAMP
+            ''', (chat_id, trigger, response, note_name, added_by))
+            conn.commit()
+
+    def remove_filter(self, chat_id: int, trigger: str) -> None:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM filters WHERE chat_id = ? AND trigger = ?', (chat_id, trigger))
+            conn.commit()
+
+    def list_filters(self, chat_id: int) -> List[Tuple[str, str | None, str | None]]:
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT trigger, response, note_name FROM filters WHERE chat_id = ? ORDER BY trigger COLLATE NOCASE', (chat_id,))
+            return [(r[0], r[1], r[2]) for r in cursor.fetchall()]
+
+    def find_filters(self, chat_id: int, text: str) -> List[Tuple[str, str | None, str | None]]:
+        # naive contains matching; can be optimized to whole-word if needed
+        triggers = self.list_filters(chat_id)
+        hits = []
+        low = text.lower()
+        for trig, resp, note in triggers:
+            if trig and trig.lower() in low:
+                hits.append((trig, resp, note))
+        return hits
