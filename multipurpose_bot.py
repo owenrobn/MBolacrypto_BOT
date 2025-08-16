@@ -1317,6 +1317,33 @@ class MultipurposeBot:
         except Exception:
             return False
 
+    async def _has_immunity(self, bot, chat_id: int, target_id: int, issuer_id: int) -> tuple[bool, str]:
+        """
+        Return (True, reason) if target should be immune from moderation actions.
+        Protect: self, bot, chat owner, and other admins.
+        """
+        try:
+            bot_id = bot.id
+        except Exception:
+            bot_id = None
+        if target_id == issuer_id:
+            return True, "You can't act on yourself."
+        if bot_id and target_id == bot_id:
+            return True, "I can't act on myself."
+        try:
+            admins = await bot.get_chat_administrators(chat_id)
+            admin_ids = {a.user.id for a in admins}
+            owner_id = next((a.user.id for a in admins if getattr(a, 'status', '') == 'creator'), None)
+        except Exception:
+            admins = []
+            admin_ids = set()
+            owner_id = None
+        if owner_id and target_id == owner_id:
+            return True, "You can't act on the group owner."
+        if target_id in admin_ids:
+            return True, "You can't act on a group admin."
+        return False, ""
+
     def _parse_target_user(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Prefer reply target
         if update.message and update.message.reply_to_message:
@@ -1363,6 +1390,10 @@ class MultipurposeBot:
         target = self._parse_target_user(update, context)
         if not target:
             await update.message.reply_text("Reply to a user's message or provide user_id. Usage: /warn <reason> (reply) or /warn <user_id> <reason>")
+            return
+        immune, reason_txt = await self._has_immunity(context.bot, chat_id, target.id, issuer)
+        if immune:
+            await update.message.reply_text(f"❌ {reason_txt}")
             return
         reason = ''
         if update.message.reply_to_message and context.args:
@@ -1453,6 +1484,10 @@ class MultipurposeBot:
         if not target:
             await update.message.reply_text("Reply or provide user_id. Usage: /mute <minutes> (reply) or /mute <user_id> <minutes>")
             return
+        immune, reason_txt = await self._has_immunity(context.bot, chat_id, target.id, issuer)
+        if immune:
+            await update.message.reply_text(f"❌ {reason_txt}")
+            return
         minutes = 10
         if update.message.reply_to_message and context.args:
             try:
@@ -1526,6 +1561,10 @@ class MultipurposeBot:
         if not target:
             await update.message.reply_text("Reply to a user or provide a username/ID.")
             return
+        immune, reason_txt = await self._has_immunity(context.bot, chat_id, target.id, issuer)
+        if immune:
+            await update.message.reply_text(f"❌ {reason_txt}")
+            return
         try:
             await context.bot.ban_chat_member(chat_id, target.id)
             await update.message.reply_text(f"⛔ Banned {getattr(target, 'first_name', target.id)}")
@@ -1559,6 +1598,10 @@ class MultipurposeBot:
         if not target:
             await update.message.reply_text("Reply to a user or provide a username/ID.")
             return
+        immune, reason_txt = await self._has_immunity(context.bot, chat_id, target.id, issuer)
+        if immune:
+            await update.message.reply_text(f"❌ {reason_txt}")
+            return
         until = datetime.utcnow() + timedelta(minutes=minutes)
         try:
             await context.bot.ban_chat_member(chat_id, target.id, until_date=until)
@@ -1583,6 +1626,10 @@ class MultipurposeBot:
         target = self._parse_target_user(update, context)
         if not target:
             await update.message.reply_text("Reply or provide user_id. Usage: /kick (reply) or /kick <user_id>")
+            return
+        immune, reason_txt = await self._has_immunity(context.bot, chat_id, target.id, issuer)
+        if immune:
+            await update.message.reply_text(f"❌ {reason_txt}")
             return
         try:
             # Kick = ban then unban
