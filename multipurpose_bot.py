@@ -867,22 +867,13 @@ class MultipurposeBot:
             if chat.type == 'private':
                 # Build the same keyboard as show_main_menu
                 keyboard: List[List[InlineKeyboardButton]] = []
-                keyboard.append([InlineKeyboardButton("🛠️ Utilities", callback_data="noop")])
-                keyboard.append([
-                    InlineKeyboardButton("🕒 Timezone (/tz)", callback_data="help_tz"),
-                    InlineKeyboardButton("🌦️ Weather", callback_data="help_weather")
-                ])
-                keyboard.append([
-                    InlineKeyboardButton("🏙️ Capital", callback_data="help_capital"),
-                    InlineKeyboardButton("🆔 My ID", callback_data="help_myid")
-                ])
                 keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
+                keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
                 try:
                     if db.is_admin(user_id) or (hasattr(self, 'admin_ids') and user_id in self.admin_ids):
                         keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
                 except Exception:
                     pass
-                keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
                 await update.message.reply_text("Main Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 await update.message.reply_text("Open a private chat with me and use /start or /menu to access the main menu.")
@@ -1289,7 +1280,8 @@ class MultipurposeBot:
         help_msg = (
             "ℹ️ About This Bot\n\n"
             "• Referral Events: create events, set group links, track referrals\n"
-            "• Group Moderation Core: warn/mute/unmute/ban/kick, anti-links, thresholds, inline config (/groupconfig)\n"
+            "• Group Moderation: warn/mute/ban/kick, anti-links, notes, filters, logging\n"
+            "• Use /groupconfig in groups for moderation settings\n"
         )
         await query.edit_message_text(help_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]))
 
