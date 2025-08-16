@@ -11,7 +11,7 @@ import httpx
 from PIL import Image
 import telegram
 import telegram.ext as tg_ext
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats, BotCommandScopeDefault, BotCommandScopeChat
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -190,6 +190,7 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('start', self.start))
         application.add_handler(CommandHandler('help', self.help_command))
         application.add_handler(CommandHandler('menu', self.menu_command))
+        application.add_handler(CommandHandler('refreshcommands', self.refreshcommands_command))
         # Rules & report
         application.add_handler(CommandHandler('rules', self.rules_command))
         application.add_handler(CommandHandler('setrules', self.setrules_command))
@@ -1289,6 +1290,70 @@ class MultipurposeBot:
             "• Group Moderation Core: warn/mute/unmute/ban/kick, anti-links, thresholds, inline config (/groupconfig)\n"
         )
         await query.edit_message_text(help_msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu")]]))
+
+    async def refreshcommands_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Admin-only in groups: refresh the slash command menu for this chat and global scopes."""
+        chat = update.effective_chat
+        user_id = update.effective_user.id if update.effective_user else None
+        try:
+            group_cmds = [
+                BotCommand('help', 'Show help'),
+                BotCommand('leaderboard', 'Referral leaderboard'),
+                BotCommand('warn', 'Warn a member (reply/ID)'),
+                BotCommand('warnings', 'Show warnings (reply/ID)'),
+                BotCommand('unwarn', 'Clear warnings (reply/ID)'),
+                BotCommand('mute', 'Mute a member'),
+                BotCommand('unmute', 'Unmute a member'),
+                BotCommand('ban', 'Ban a member'),
+                BotCommand('tban', 'Temp-ban a member'),
+                BotCommand('kick', 'Kick a member'),
+                BotCommand('purge', 'Delete a range/previous messages'),
+                BotCommand('del', 'Delete replied message'),
+                BotCommand('groupconfig', 'Open group config panel'),
+                BotCommand('setwarns', 'Set warn threshold'),
+                BotCommand('setmute', 'Set default mute minutes'),
+                BotCommand('setautoban', 'Toggle autoban on repeat'),
+                BotCommand('setresetwarns', 'Toggle reset warnings on mute'),
+                BotCommand('cleanservice', 'Toggle cleaning service msgs'),
+                BotCommand('captcha', 'Toggle captcha/approval'),
+                BotCommand('lock', 'Lock a media/type'),
+                BotCommand('lockall', 'Lock multiple types'),
+                BotCommand('settings', 'Show group settings'),
+                BotCommand('setlogchat', 'Set log chat'),
+                BotCommand('clearlogchat', 'Unset log chat'),
+                BotCommand('save', 'Save a note'),
+                BotCommand('get', 'Get a note'),
+                BotCommand('notes', 'List notes'),
+                BotCommand('delnote', 'Delete a note'),
+                BotCommand('filter', 'Add a keyword filter'),
+                BotCommand('stop', 'Remove a keyword filter'),
+                BotCommand('tagactives', 'Tag active users'),
+            ]
+            private_cmds = [
+                BotCommand('start', 'Start / open menu'),
+                BotCommand('menu', 'Open main menu'),
+                BotCommand('help', 'Show help'),
+            ]
+            # Always refresh global scopes too
+            await context.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+            await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+            # Per-chat override when in a group/supergroup
+            if chat.type in ['group', 'supergroup']:
+                if not await self._is_group_admin(context.bot, chat.id, user_id):
+                    await update.message.reply_text("Only admins can refresh commands in groups.")
+                    return
+                await context.bot.set_my_commands(group_cmds, scope=BotCommandScopeChat(chat_id=chat.id))
+                await update.message.reply_text("✅ Commands refreshed for this group. If you still see the old list, wait ~1 minute or type / to refresh.")
+            else:
+                # Private chat
+                await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeChat(chat_id=chat.id))
+                await update.message.reply_text("✅ Commands refreshed for this chat.")
+        except Exception as e:
+            logger.warning(f"refreshcommands failed: {e}")
+            try:
+                await update.message.reply_text("❌ Failed to refresh commands.")
+            except Exception:
+                pass
 
     # ========== Referral: Stats / Leaderboard ==========
     async def show_stats(self, query, user_id: int):
