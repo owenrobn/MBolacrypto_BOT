@@ -11,7 +11,7 @@ import httpx
 from PIL import Image
 import telegram
 import telegram.ext as tg_ext
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, ChatMemberHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -127,6 +127,54 @@ class MultipurposeBot:
                 logger.info("Webhook deleted (if existed)")
             except Exception as e:
                 logger.warning(f"delete_webhook failed: {e}")
+            # Set bot commands for better UX in chats
+            try:
+                group_cmds = [
+                    BotCommand('help', 'Show help'),
+                    BotCommand('leaderboard', 'Referral leaderboard'),
+                    BotCommand('warn', 'Warn a member (reply/ID)'),
+                    BotCommand('warnings', 'Show warnings (reply/ID)'),
+                    BotCommand('unwarn', 'Clear warnings (reply/ID)'),
+                    BotCommand('mute', 'Mute a member'),
+                    BotCommand('unmute', 'Unmute a member'),
+                    BotCommand('ban', 'Ban a member'),
+                    BotCommand('tban', 'Temp-ban a member'),
+                    BotCommand('kick', 'Kick a member'),
+                    BotCommand('purge', 'Delete a range/previous messages'),
+                    BotCommand('del', 'Delete replied message'),
+                    BotCommand('groupconfig', 'Open group config panel'),
+                    BotCommand('setwarns', 'Set warn threshold'),
+                    BotCommand('setmute', 'Set default mute minutes'),
+                    BotCommand('setautoban', 'Toggle autoban on repeat'),
+                    BotCommand('setresetwarns', 'Toggle reset warnings on mute'),
+                    BotCommand('cleanservice', 'Toggle cleaning service msgs'),
+                    BotCommand('captcha', 'Toggle captcha/approval'),
+                    BotCommand('lock', 'Lock a media/type'),
+                    BotCommand('lockall', 'Lock multiple types'),
+                    BotCommand('settings', 'Show group settings'),
+                    BotCommand('setlogchat', 'Set log chat'),
+                    BotCommand('clearlogchat', 'Unset log chat'),
+                    BotCommand('save', 'Save a note'),
+                    BotCommand('get', 'Get a note'),
+                    BotCommand('notes', 'List notes'),
+                    BotCommand('delnote', 'Delete a note'),
+                    BotCommand('filter', 'Add a keyword filter'),
+                    BotCommand('stop', 'Remove a keyword filter'),
+                    BotCommand('tagactives', 'Tag active users'),
+                ]
+                await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
+
+                private_cmds = [
+                    BotCommand('start', 'Start / open menu'),
+                    BotCommand('menu', 'Open main menu'),
+                    BotCommand('help', 'Show help'),
+                ]
+                await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+
+                # Default fallback (optional)
+                await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeDefault())
+            except Exception as e:
+                logger.warning(f"set_my_commands failed: {e}")
 
         application = (
             Application.builder()
