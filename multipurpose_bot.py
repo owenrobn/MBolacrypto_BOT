@@ -191,6 +191,8 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('help', self.help_command))
         application.add_handler(CommandHandler('menu', self.menu_command))
         application.add_handler(CommandHandler('refreshcommands', self.refreshcommands_command))
+        application.add_handler(CommandHandler('showcommands', self.showcommands_command))
+        application.add_handler(CommandHandler('resetcommands', self.resetcommands_command))
         # Rules & report
         application.add_handler(CommandHandler('rules', self.rules_command))
         application.add_handler(CommandHandler('setrules', self.setrules_command))
@@ -1352,6 +1354,53 @@ class MultipurposeBot:
             logger.warning(f"refreshcommands failed: {e}")
             try:
                 await update.message.reply_text("❌ Failed to refresh commands.")
+            except Exception:
+                pass
+
+    async def showcommands_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show which commands the bot currently exposes for this chat and default scopes."""
+        chat = update.effective_chat
+        try:
+            cur = await context.bot.get_my_commands(scope=BotCommandScopeChat(chat_id=chat.id))
+            default_cmds = await context.bot.get_my_commands()
+            group_cmds = await context.bot.get_my_commands(scope=BotCommandScopeAllGroupChats())
+            private_cmds = await context.bot.get_my_commands(scope=BotCommandScopeAllPrivateChats())
+            def fmt(cmds):
+                return '\n'.join(f"/{c.command} - {c.description}" for c in cmds) or '(none)'
+            msg = (
+                f"Scope: this chat ({chat.id})\n" + fmt(cur) + "\n\n" +
+                "Scope: all group chats\n" + fmt(group_cmds) + "\n\n" +
+                "Scope: all private chats\n" + fmt(private_cmds) + "\n\n" +
+                "Scope: default\n" + fmt(default_cmds)
+            )
+            await update.message.reply_text(msg)
+        except Exception as e:
+            logger.warning(f"showcommands failed: {e}")
+            try:
+                await update.message.reply_text("❌ Failed to get commands.")
+            except Exception:
+                pass
+
+    async def resetcommands_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Admin-only in groups: clear all command scopes and re-apply defaults."""
+        chat = update.effective_chat
+        user_id = update.effective_user.id if update.effective_user else None
+        try:
+            # Clear
+            await context.bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+            await context.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
+            await context.bot.delete_my_commands(scope=BotCommandScopeDefault())
+            if chat.type in ['group', 'supergroup']:
+                if not await self._is_group_admin(context.bot, chat.id, user_id):
+                    await update.message.reply_text("Only admins can reset in groups.")
+                    return
+                await context.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat.id))
+            # Re-apply by calling refresh
+            await self.refreshcommands_command(update, context)
+        except Exception as e:
+            logger.warning(f"resetcommands failed: {e}")
+            try:
+                await update.message.reply_text("❌ Failed to reset commands.")
             except Exception:
                 pass
 
