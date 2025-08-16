@@ -640,6 +640,25 @@ class MultipurposeBot:
         except Exception as e:
             logger.warning(f"service cleaner error: {e}")
 
+    async def error_handler(self, update: object, context: ContextTypes.DEFAULT_TYPE):
+        """Global error handler for the Telegram application.
+        Logs the exception; optionally could notify admins or write to log chat.
+        """
+        try:
+            err = getattr(context, 'error', None)
+            logger.error("Unhandled exception in handler", exc_info=err)
+            # Attempt to relay minimal info when possible (avoid raising further exceptions)
+            if update and isinstance(update, Update):
+                chat = update.effective_chat
+                if chat and chat.type in ['group', 'supergroup']:
+                    try:
+                        await self._log(chat.id, f"[ERROR] {type(err).__name__ if err else 'Exception'} occurred.")
+                    except Exception:
+                        pass
+        except Exception as e:
+            # As a last resort
+            logger.error(f"error_handler internal failure: {e}")
+
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = (
             "ℹ️ About This Bot\n\n"
