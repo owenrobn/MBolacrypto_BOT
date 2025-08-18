@@ -171,65 +171,39 @@ class MultipurposeBot:
         # keep reference for logging helper
         self.app = application
 
-        # Commands (referral + moderation core only)
+        # Core commands
         application.add_handler(CommandHandler('start', self.start))
         application.add_handler(CommandHandler('help', self.help_command))
         application.add_handler(CommandHandler('menu', self.menu_command))
         application.add_handler(CommandHandler('refreshcommands', self.refreshcommands_command))
-        application.add_handler(CommandHandler('showcommands', self.showcommands_command))
-        application.add_handler(CommandHandler('resetcommands', self.resetcommands_command))
-        # Rules & report
-        application.add_handler(CommandHandler('rules', self.rules_command))
-        application.add_handler(CommandHandler('setrules', self.setrules_command))
-        application.add_handler(CommandHandler('report', self.report_command))
-        # Referral-specific commands
-        application.add_handler(CommandHandler('end_event', self.end_event_command))
-        application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
-        # Moderation core
+        
+        # Group management commands
+        application.add_handler(CommandHandler('config', self.group_config_command))
+        application.add_handler(CommandHandler('antilinks', self.antilinks_command))
+        application.add_handler(CommandHandler('setwarns', self.setwarns_command))
+        application.add_handler(CommandHandler('setmute', self.setmute_command))
+        application.add_handler(CommandHandler('setautoban', self.setautoban_command))
+        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command))
+        
+        # Moderation commands
         application.add_handler(CommandHandler('warn', self.warn_command))
-        application.add_handler(CommandHandler('warnings', self.warnings_command))
         application.add_handler(CommandHandler('mute', self.mute_command))
-        application.add_handler(CommandHandler('unmute', self.unmute_command))
         application.add_handler(CommandHandler('ban', self.ban_command))
-        application.add_handler(CommandHandler('tban', self.tban_command))
         application.add_handler(CommandHandler('kick', self.kick_command))
-        # Moderation config - using direct commands for better UX
-        application.add_handler(CommandHandler('config', self.group_config_command))  # Main config menu
-        application.add_handler(CommandHandler('antilinks', self.antilinks_command))  # Toggle anti-links
-        application.add_handler(CommandHandler('setwarns', self.setwarns_command))    # Set warning threshold
-        application.add_handler(CommandHandler('setmute', self.setmute_command))      # Set mute duration
-        application.add_handler(CommandHandler('setautoban', self.setautoban_command)) # Toggle auto-ban
-        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command)) # Toggle reset warns
-        application.add_handler(CommandHandler('unwarn', self.unwarn_command))        # Remove warnings
-        application.add_handler(CommandHandler('tagactives', self.tagactives_command)) # Tag active users
-        application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
-        # Media locks and logging configuration
-        application.add_handler(CommandHandler('lock', self.lock_command))
-        application.add_handler(CommandHandler('lockall', self.lockall_command))
-        application.add_handler(CommandHandler('setlogchat', self.setlogchat_command))
-        application.add_handler(CommandHandler('clearlogchat', self.clearlogchat_command))
-        application.add_handler(CommandHandler('settings', self.settings_command))
-        # Clean service and captcha
-        application.add_handler(CommandHandler('cleanservice', self.cleanservice_command))
-        application.add_handler(CommandHandler('captcha', self.captcha_command))
-        # Notes and filters
-        application.add_handler(CommandHandler('save', self.save_note_command))
-        application.add_handler(CommandHandler('get', self.get_note_command))
-        application.add_handler(CommandHandler('notes', self.notes_command))
-        application.add_handler(CommandHandler('delnote', self.delnote_command))
-        application.add_handler(CommandHandler('filter', self.filter_command))
-        application.add_handler(CommandHandler('stop', self.stopfilter_command))
-        # Aliases
-        application.add_handler(CommandHandler('locks', self.settings_command))
-        application.add_handler(CommandHandler('setlog', self.setlogchat_command))
-        application.add_handler(CommandHandler('unsetlog', self.clearlogchat_command))
-
-        # Callbacks and messages
+        application.add_handler(CommandHandler('purge', self.purge_command))
+        
+        # Info commands
+        application.add_handler(CommandHandler('rules', self.rules_command))
+        application.add_handler(CommandHandler('report', self.report_command))
+        application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
+        
+        # Callback handlers
         application.add_handler(CallbackQueryHandler(self.button_handler))
+        application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
         application.add_handler(CallbackQueryHandler(self.approval_callback, pattern=r'^approve:'))
-        # Clean service: delete service messages (joins, leaves, pins, etc.) when enabled
-        application.add_handler(MessageHandler(filters.StatusUpdate.ALL, self._service_message_handler))
-        # Group message monitor for moderation and activity tracking (unified)
+        
+        # Message handlers
+        application.add_handler(MessageHandler(filters.StatusUpdate.ALL, self._service_message_handler))  # Service messages
         application.add_handler(MessageHandler(
             filters.ChatType.GROUPS & (filters.ALL),
             self._group_message_handler_unified
