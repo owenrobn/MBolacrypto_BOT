@@ -208,16 +208,15 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('ban', self.ban_command))
         application.add_handler(CommandHandler('tban', self.tban_command))
         application.add_handler(CommandHandler('kick', self.kick_command))
-        # Moderation config
-        application.add_handler(CommandHandler('config', self.group_config_command))
-        application.add_handler(CommandHandler('antilinks', self.antilinks_command))
-        application.add_handler(CommandHandler('setwarns', self.setwarns_command))
-        application.add_handler(CommandHandler('setmute', self.setmute_command))
-        application.add_handler(CommandHandler('setautoban', self.setautoban_command))
-        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command))
-        application.add_handler(CommandHandler('unwarn', self.unwarn_command))
-        application.add_handler(CommandHandler('tagactives', self.tagactives_command))
-        application.add_handler(CommandHandler('groupconfig', self.group_config_command))
+        # Moderation config - using direct commands for better UX
+        application.add_handler(CommandHandler('config', self.group_config_command))  # Main config menu
+        application.add_handler(CommandHandler('antilinks', self.antilinks_command))  # Toggle anti-links
+        application.add_handler(CommandHandler('setwarns', self.setwarns_command))    # Set warning threshold
+        application.add_handler(CommandHandler('setmute', self.setmute_command))      # Set mute duration
+        application.add_handler(CommandHandler('setautoban', self.setautoban_command)) # Toggle auto-ban
+        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command)) # Toggle reset warns
+        application.add_handler(CommandHandler('unwarn', self.unwarn_command))        # Remove warnings
+        application.add_handler(CommandHandler('tagactives', self.tagactives_command)) # Tag active users
         application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
         # Media locks and logging configuration
         application.add_handler(CommandHandler('lock', self.lock_command))
