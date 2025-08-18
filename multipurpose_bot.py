@@ -145,8 +145,7 @@ class MultipurposeBot:
                     BotCommand('rules', 'Show group rules'),
                     BotCommand('report', 'Report a user/message')
                 ]
-                await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
-
+                
                 # Private chat commands
                 private_cmds = [
                     BotCommand('start', 'Start the bot'),
@@ -154,12 +153,24 @@ class MultipurposeBot:
                     BotCommand('help', 'Show help'),
                     BotCommand('leaderboard', 'Show leaderboard')
                 ]
+                
+                # Clear all existing commands first
+                await app.bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+                await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
+                await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
+                
+                # Add a small delay to ensure commands are cleared
+                import asyncio
+                await asyncio.sleep(1)
+                
+                # Set new commands
+                await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
                 await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
-
-                # Default fallback
                 await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeDefault())
+                
+                logger.info("Bot commands have been updated")
             except Exception as e:
-                logger.warning(f"set_my_commands failed: {e}")
+                logger.error(f"Failed to set bot commands: {e}", exc_info=True)
 
         application = (
             Application.builder()
@@ -1020,19 +1031,31 @@ class MultipurposeBot:
                 BotCommand('leaderboard', 'Show leaderboard')
             ]
             
-            # Always refresh global scopes too
+            # Clear all existing commands first
+            await context.bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
+            await context.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
+            await context.bot.delete_my_commands(scope=BotCommandScopeDefault())
+            
+            # Add a small delay to ensure commands are cleared
+            import asyncio
+            await asyncio.sleep(1)
+            
+            # Set new commands
             await context.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
             await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+            await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeDefault())
             
             # Per-chat override when in a group/supergroup
             if chat.type in ['group', 'supergroup']:
                 if not await self._is_group_admin(context.bot, chat.id, user_id):
                     await update.message.reply_text("Only admins can refresh commands in groups.")
                     return
+                await context.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat.id))
                 await context.bot.set_my_commands(group_cmds, scope=BotCommandScopeChat(chat_id=chat.id))
                 await update.message.reply_text("✅ Commands refreshed for this group. If you still see the old list, wait ~1 minute or type / to refresh.")
             else:
                 # Private chat
+                await context.bot.delete_my_commands(scope=BotCommandScopeChat(chat_id=chat.id))
                 await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeChat(chat_id=chat.id))
                 await update.message.reply_text("✅ Commands refreshed for this chat.")
         except Exception as e:
