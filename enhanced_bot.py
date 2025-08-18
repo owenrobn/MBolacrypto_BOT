@@ -16,6 +16,7 @@ import telegram
 import telegram.ext as tg_ext
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+import telegram
 from dotenv import load_dotenv
 from database import Database
 
@@ -80,6 +81,7 @@ class EnhancedRefContestBot:
                 "Please ensure PTB 20.x is installed (requirements.txt pins 20.8)."
             )
         logger.info(f"Enhanced bot initialized with username: {self.bot_username}")
+        logger.info(f"python-telegram-bot version: {telegram.__version__}")
     
     def is_valid_telegram_link(self, link: str) -> bool:
         """Validate if the provided link is a valid Telegram group/channel link."""
@@ -1318,21 +1320,10 @@ Use /start to open the menu and explore features. For referrals, grab your link 
                 .build()
             )
             
-            # Add handlers
+            # Add handlers - only keep essential commands
             application.add_handler(CommandHandler("start", self.start))
             application.add_handler(CommandHandler("leaderboard", self.group_leaderboard_command))
             application.add_handler(CommandHandler("end_event", self.end_event_command))
-            application.add_handler(CommandHandler("join", self.join_command))
-            application.add_handler(CommandHandler("stop", self.stop_command))
-            application.add_handler(CommandHandler("tz", self.tz_command))
-            application.add_handler(CommandHandler("capital", self.capital_command))
-            application.add_handler(CommandHandler("weather", self.weather_command))
-            application.add_handler(CommandHandler("fancy", self.fancy_command))
-            application.add_handler(CommandHandler("broadcast", self.broadcast_command))
-            application.add_handler(CommandHandler("myid", self.myid_command))
-            application.add_handler(CommandHandler("admins", self.admins_command))
-            application.add_handler(CommandHandler("addadmin", self.addadmin_command))
-            application.add_handler(CommandHandler("rmadmin", self.rmadmin_command))
             application.add_handler(CallbackQueryHandler(self.button_handler))
             application.add_handler(MessageHandler(filters.PHOTO, self.photo_to_sticker))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
