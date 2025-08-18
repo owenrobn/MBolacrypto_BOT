@@ -208,9 +208,9 @@ class MultipurposeBot:
         application.add_handler(CommandHandler('ban', self.ban_command))
         application.add_handler(CommandHandler('tban', self.tban_command))
         application.add_handler(CommandHandler('kick', self.kick_command))
-        application.add_handler(CommandHandler('purge', self.purge_command))
-        application.add_handler(CommandHandler('del', self.del_command))
         # Moderation config
+        application.add_handler(CommandHandler('config', self.group_config_command))
+        application.add_handler(CommandHandler('antilinks', self.antilinks_command))
         application.add_handler(CommandHandler('setwarns', self.setwarns_command))
         application.add_handler(CommandHandler('setmute', self.setmute_command))
         application.add_handler(CommandHandler('setautoban', self.setautoban_command))
@@ -845,22 +845,36 @@ class MultipurposeBot:
 
         # Anti-links enforcement
         try:
+            gs = db.get_group_settings(chat.id)  # Get fresh settings
             if gs.get('anti_links', 0):
                 has_link = False
-                # Prefer Telegram's entity parsing for URLs
-                try:
-                    for ent in (message.entities or []):
-                        if ent.type in ("url", "text_link"):
+                
+                # Check for links in text and caption
+                text = (message.text or message.caption or "").lower()
+                
+                # Check Telegram entities first (for URLs and text links)
+                for ent in (message.entities or []):
+                    if ent.type in ("url", "text_link"):
+                        has_link = True
+                        break
+                
+                # Fallback regex for common link patterns if no entities found
+                if not has_link and text:
+                    # Match http(s)://, www., t.me/, telegram.me/
+                    link_patterns = [
+                        r'https?://\S+',
+                        r'www\.\S+',
+                        r't\.me/\S+',
+                        r'telegram\.me/\S+',
+                        r'[a-z0-9-]+\.(com|org|net|io|me|gg|xyz|info|app|dev|co|us|uk|ca|au|nz|in|de|fr|es|it|nl|pt|ru|jp|cn|kr|br|mx|ar|id|my|sg|th|vn|ph|tr|sa|ae|eg|za|ng|ke|ma|dz|eg|za|ng|ke|ma|dz|com\.\w{2,3})(/\S*)?'
+                    ]
+                    
+                    for pattern in link_patterns:
+                        if re.search(pattern, text, re.IGNORECASE):
                             has_link = True
                             break
-                except Exception:
-                    pass
-                # Fallback regex for common link patterns
-                if not has_link:
-                    text = (message.text or message.caption or "")
-                    if text:
-                        if re.search(r"(https?://|www\.|t\.me/)\S+", text, re.IGNORECASE):
-                            has_link = True
+                
+                # If link detected, take action
                 if has_link:
                     try:
                         await context.bot.delete_message(chat.id, message.message_id)
@@ -1702,25 +1716,61 @@ class MultipurposeBot:
         ]
         return InlineKeyboardMarkup(rows)
 
-    async def group_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def antilinks_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Toggle anti-links protection in the group"""
         if update.effective_chat.type not in ['group', 'supergroup']:
-            await update.message.reply_text('Use this in a group.')
+            await update.message.reply_text('This command only works in groups.')
             return
+            
         chat_id = update.effective_chat.id
-        issuer = update.effective_user.id
-        if not await self._is_group_admin(context.bot, chat_id, issuer):
-            await update.message.reply_text('Only admins can open group config.')
+        user_id = update.effective_user.id
+        
+        if not await self._is_group_admin(context.bot, chat_id, user_id):
+            await update.message.reply_text('Only admins can change this setting.')
             return
+            
+        gs = db.get_group_settings(chat_id)
+        current = gs.get('anti_links', 0)
+        new_value = 0 if current else 1
+        db.set_group_setting(chat_id, 'anti_links', new_value)
+        
+        status = 'enabled' if new_value else 'disabled'
+        await update.message.reply_text(f"✅ Anti-links protection has been {status} for this group.")
+        
+    async def group_config_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show group configuration menu"""
+        if update.effective_chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text('This command only works in groups.')
+            return
+            
+        chat_id = update.effective_chat.id
+        user_id = update.effective_user.id
+        
+        if not await self._is_group_admin(context.bot, chat_id, user_id):
+            await update.message.reply_text('Only admins can configure the group.')
+            return
+            
         gs = db.get_group_settings(chat_id)
         text = (
-            "Group Configuration\n\n"
-            f"Anti-links: {'ON' if gs.get('anti_links',0) else 'OFF'}\n"
-            f"Warn threshold: {gs.get('warn_threshold',3)}\n"
-            f"Mute minutes: {gs.get('mute_minutes_default',10)}\n"
-            f"Auto-ban on repeat: {'ON' if gs.get('auto_ban_on_repeat',1) else 'OFF'}\n"
-            f"Reset warns after mute: {'ON' if gs.get('strikes_reset_on_mute',1) else 'OFF'}\n"
+            "🔧 *Group Configuration*\n\n"
+            "*Quick Commands:*\n"
+            "• /antilinks - Toggle link protection\n"
+            "• /setwarns [1-10] - Set warning threshold\n"
+            "• /setmute [1-10080] - Set mute duration (minutes)\n"
+            "• /setautoban [on/off] - Toggle auto-ban on max warns\n"
+            "• /setresetwarns [on/off] - Toggle reset warnings after mute\n\n"
+            "*Current Settings:*\n"
+            f"• Anti-links: `{'✅ ON' if gs.get('anti_links',0) else '❌ OFF'}`\n"
+            f"• Warn threshold: `{gs.get('warn_threshold',3)}`\n"
+            f"• Mute duration: `{gs.get('mute_minutes_default',10)}` mins\n"
+            f"• Auto-ban on max warns: `{'✅ ON' if gs.get('auto_ban_on_repeat',1) else '❌ OFF'}`\n"
+            f"• Reset warns after mute: `{'✅ ON' if gs.get('strikes_reset_on_mute',1) else '❌ OFF'}`"
         )
-        await update.message.reply_text(text, reply_markup=self._render_group_config_kb(gs))
+        await update.message.reply_text(
+            text, 
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=self._render_group_config_kb(gs)
+        )
 
     async def group_config_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = update.callback_query
