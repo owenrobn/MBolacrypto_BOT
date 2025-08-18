@@ -129,49 +129,34 @@ class MultipurposeBot:
                 logger.warning(f"delete_webhook failed: {e}")
             # Set bot commands for better UX in chats
             try:
+                # Group commands (admin only)
                 group_cmds = [
-                    BotCommand('help', 'Show help'),
-                    BotCommand('leaderboard', 'Referral leaderboard'),
-                    BotCommand('warn', 'Warn a member (reply/ID)'),
-                    BotCommand('warnings', 'Show warnings (reply/ID)'),
-                    BotCommand('unwarn', 'Clear warnings (reply/ID)'),
-                    BotCommand('mute', 'Mute a member'),
-                    BotCommand('unmute', 'Unmute a member'),
-                    BotCommand('ban', 'Ban a member'),
-                    BotCommand('tban', 'Temp-ban a member'),
-                    BotCommand('kick', 'Kick a member'),
-                    BotCommand('purge', 'Delete a range/previous messages'),
-                    BotCommand('del', 'Delete replied message'),
-                    BotCommand('groupconfig', 'Open group config panel'),
-                    BotCommand('setwarns', 'Set warn threshold'),
-                    BotCommand('setmute', 'Set default mute minutes'),
-                    BotCommand('setautoban', 'Toggle autoban on repeat'),
-                    BotCommand('setresetwarns', 'Toggle reset warnings on mute'),
-                    BotCommand('cleanservice', 'Toggle cleaning service msgs'),
-                    BotCommand('captcha', 'Toggle captcha/approval'),
-                    BotCommand('lock', 'Lock a media/type'),
-                    BotCommand('lockall', 'Lock multiple types'),
-                    BotCommand('settings', 'Show group settings'),
-                    BotCommand('setlogchat', 'Set log chat'),
-                    BotCommand('clearlogchat', 'Unset log chat'),
-                    BotCommand('save', 'Save a note'),
-                    BotCommand('get', 'Get a note'),
-                    BotCommand('notes', 'List notes'),
-                    BotCommand('delnote', 'Delete a note'),
-                    BotCommand('filter', 'Add a keyword filter'),
-                    BotCommand('stop', 'Remove a keyword filter'),
-                    BotCommand('tagactives', 'Tag active users'),
+                    BotCommand('config', 'Group settings'),
+                    BotCommand('antilinks', 'Toggle anti-links'),
+                    BotCommand('setwarns', 'Set warning threshold'),
+                    BotCommand('setmute', 'Set mute duration'),
+                    BotCommand('setautoban', 'Toggle auto-ban'),
+                    BotCommand('setresetwarns', 'Toggle reset warnings'),
+                    BotCommand('warn', 'Warn a user'),
+                    BotCommand('mute', 'Mute a user'),
+                    BotCommand('ban', 'Ban a user'),
+                    BotCommand('kick', 'Kick a user'),
+                    BotCommand('purge', 'Delete messages'),
+                    BotCommand('rules', 'Show group rules'),
+                    BotCommand('report', 'Report a user/message')
                 ]
                 await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
 
+                # Private chat commands
                 private_cmds = [
-                    BotCommand('start', 'Start / open menu'),
+                    BotCommand('start', 'Start the bot'),
                     BotCommand('menu', 'Open main menu'),
                     BotCommand('help', 'Show help'),
+                    BotCommand('leaderboard', 'Show leaderboard')
                 ]
                 await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
 
-                # Default fallback (optional)
+                # Default fallback
                 await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeDefault())
             except Exception as e:
                 logger.warning(f"set_my_commands failed: {e}")
@@ -1036,47 +1021,35 @@ class MultipurposeBot:
         chat = update.effective_chat
         user_id = update.effective_user.id if update.effective_user else None
         try:
+            # Group commands (admin only)
             group_cmds = [
-                BotCommand('help', 'Show help'),
-                BotCommand('leaderboard', 'Referral leaderboard'),
-                BotCommand('warn', 'Warn a member (reply/ID)'),
-                BotCommand('warnings', 'Show warnings (reply/ID)'),
-                BotCommand('unwarn', 'Clear warnings (reply/ID)'),
-                BotCommand('mute', 'Mute a member'),
-                BotCommand('unmute', 'Unmute a member'),
-                BotCommand('ban', 'Ban a member'),
-                BotCommand('tban', 'Temp-ban a member'),
-                BotCommand('kick', 'Kick a member'),
-                BotCommand('purge', 'Delete a range/previous messages'),
-                BotCommand('del', 'Delete replied message'),
-                BotCommand('groupconfig', 'Open group config panel'),
-                BotCommand('setwarns', 'Set warn threshold'),
-                BotCommand('setmute', 'Set default mute minutes'),
-                BotCommand('setautoban', 'Toggle autoban on repeat'),
-                BotCommand('setresetwarns', 'Toggle reset warnings on mute'),
-                BotCommand('cleanservice', 'Toggle cleaning service msgs'),
-                BotCommand('captcha', 'Toggle captcha/approval'),
-                BotCommand('lock', 'Lock a media/type'),
-                BotCommand('lockall', 'Lock multiple types'),
-                BotCommand('settings', 'Show group settings'),
-                BotCommand('setlogchat', 'Set log chat'),
-                BotCommand('clearlogchat', 'Unset log chat'),
-                BotCommand('save', 'Save a note'),
-                BotCommand('get', 'Get a note'),
-                BotCommand('notes', 'List notes'),
-                BotCommand('delnote', 'Delete a note'),
-                BotCommand('filter', 'Add a keyword filter'),
-                BotCommand('stop', 'Remove a keyword filter'),
-                BotCommand('tagactives', 'Tag active users'),
+                BotCommand('config', 'Group settings'),
+                BotCommand('antilinks', 'Toggle anti-links'),
+                BotCommand('setwarns', 'Set warning threshold'),
+                BotCommand('setmute', 'Set mute duration'),
+                BotCommand('setautoban', 'Toggle auto-ban'),
+                BotCommand('setresetwarns', 'Toggle reset warnings'),
+                BotCommand('warn', 'Warn a user'),
+                BotCommand('mute', 'Mute a user'),
+                BotCommand('ban', 'Ban a user'),
+                BotCommand('kick', 'Kick a user'),
+                BotCommand('purge', 'Delete messages'),
+                BotCommand('rules', 'Show group rules'),
+                BotCommand('report', 'Report a user/message')
             ]
+            
+            # Private chat commands
             private_cmds = [
-                BotCommand('start', 'Start / open menu'),
+                BotCommand('start', 'Start the bot'),
                 BotCommand('menu', 'Open main menu'),
                 BotCommand('help', 'Show help'),
+                BotCommand('leaderboard', 'Show leaderboard')
             ]
+            
             # Always refresh global scopes too
             await context.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
             await context.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
+            
             # Per-chat override when in a group/supergroup
             if chat.type in ['group', 'supergroup']:
                 if not await self._is_group_admin(context.bot, chat.id, user_id):
