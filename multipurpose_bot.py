@@ -727,286 +727,27 @@ class MultipurposeBot:
         else:
             await update.message.reply_text(msg + "\n\nUse /menu to open the main menu.")
 
-    # ========== Utilities ==========
-    async def tz_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("Usage: /tz <AFRICA_COUNTRY_CODE> e.g. /tz NG")
-
-    async def capital_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        args = context.args
-        if not args:
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                "Usage: /capital <AFRICA_COUNTRY_CODE> e.g. /capital GH" +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-            return
-        code = args[0].upper()
-        info = AFRICA_INFO.get(code)
-        if not info:
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                "Unknown or unsupported country code. Try NG, GH, KE, ZA, EG, DZ, MA, TZ" +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-            return
-        markup = self._back_main_markup(update.effective_chat.type)
-        await update.message.reply_text(
-            f"Capital of {info['country']}: {info['capital']}" +
-            ("\n\nUse /menu to open the main menu." if not markup else ""),
-            reply_markup=markup
-        )
-
-    async def weather_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                "Usage: /weather <city or country>" +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-            return
-        query = " ".join(context.args)
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                geo = await client.get(
-                    "https://geocoding-api.open-meteo.com/v1/search",
-                    params={"name": query, "count": 1}
-                )
-                if geo.status_code != 200:
-                    markup = self._back_main_markup(update.effective_chat.type)
-                    await update.message.reply_text(
-                        "Failed to geocode. Try a different place." +
-                        ("\n\nUse /menu to open the main menu." if not markup else ""),
-                        reply_markup=markup
-                    )
-                    return
-                j = geo.json()
-                res = (j or {}).get('results') or []
-                if not res:
-                    markup = self._back_main_markup(update.effective_chat.type)
-                    await update.message.reply_text(
-                        "Place not found. Try a different query." +
-                        ("\n\nUse /menu to open the main menu." if not markup else ""),
-                        reply_markup=markup
-                    )
-                    return
-                lat = res[0]['latitude']; lon = res[0]['longitude']
-                wx = await client.get(
-                    "https://api.open-meteo.com/v1/forecast",
-                    params={"latitude": lat, "longitude": lon, "current_weather": True}
-                )
-                if wx.status_code != 200:
-                    markup = self._back_main_markup(update.effective_chat.type)
-                    await update.message.reply_text(
-                        "Weather API error." +
-                        ("\n\nUse /menu to open the main menu." if not markup else ""),
-                        reply_markup=markup
-                    )
-                    return
-                w = wx.json().get('current_weather') or {}
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                f"Weather for {query}: {w.get('temperature', '?')}°C, wind {w.get('windspeed', '?')} km/h" +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-        except Exception as e:
-            logger.error(f"/weather error: {e}")
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                "Error fetching weather." +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-
-    async def fancy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not context.args:
-            markup = self._back_main_markup(update.effective_chat.type)
-            await update.message.reply_text(
-                "Usage: /fancy <text>" +
-                ("\n\nUse /menu to open the main menu." if not markup else ""),
-                reply_markup=markup
-            )
-            return
-        text = " ".join(context.args)
-        styled = ''.join(ch + '͟' for ch in text)  # simple underline style
-        markup = self._back_main_markup(update.effective_chat.type)
-        await update.message.reply_text(
-            styled + ("\n\nUse /menu to open the main menu." if not markup else ""),
-            reply_markup=markup
-        )
-
-    # ========== Opt-in / Broadcast ==========
-    async def join_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        db.set_opt_in(user.id, True)
-        markup = self._back_main_markup(update.effective_chat.type)
-        await update.message.reply_text(
-            "You're subscribed to broadcasts. Use /stop to unsubscribe." +
-            ("\n\nUse /menu to open the main menu." if not markup else ""),
-            reply_markup=markup
-        )
-
-    async def stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        user = update.effective_user
-        db.set_opt_in(user.id, False)
-        markup = self._back_main_markup(update.effective_chat.type)
-        await update.message.reply_text(
-            "You have unsubscribed. Send /join to subscribe again." +
-            ("\n\nUse /menu to open the main menu." if not markup else ""),
-            reply_markup=markup
-        )
+    # ========== Menu Management ==========
 
     async def menu_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Open the main menu via command. In private, show inline menu; in groups, hint to DM or use buttons where applicable."""
+        """Open the main menu via command. In private, show inline menu; in groups, hint to DM."""
         try:
             chat = update.effective_chat
-            user_id = update.effective_user.id if update.effective_user else None
             if chat.type == 'private':
-                # Build the same keyboard as show_main_menu
-                keyboard: List[List[InlineKeyboardButton]] = []
-                keyboard.append([InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")])
-                keyboard.append([InlineKeyboardButton("ℹ️ Help", callback_data="help")])
-                try:
-                    if db.is_admin(user_id) or (hasattr(self, 'admin_ids') and user_id in self.admin_ids):
-                        keyboard.append([InlineKeyboardButton("👑 Admins (/admins)", callback_data="help_admins")])
-                except Exception:
-                    pass
+                keyboard = [
+                    [InlineKeyboardButton("🎯 Referral Center", callback_data="ref_center")],
+                    [InlineKeyboardButton("ℹ️ Help", callback_data="help")]
+                ]
                 await update.message.reply_text("Main Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
             else:
                 await update.message.reply_text("Open a private chat with me and use /start or /menu to access the main menu.")
         except Exception as e:
             logger.error(f"/menu error: {e}")
-            try:
-                await update.message.reply_text("Could not open menu. Please try again.")
-            except Exception:
-                pass
+            await update.message.reply_text("Could not open menu. Please try again.")
 
-    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user = update.effective_user
-            if not db.is_admin(user.id) and user.id not in self.admin_ids:
-                await update.message.reply_text("You are not authorized to use this command.")
-                return
-            message_text = ' '.join(context.args).strip()
-            if not message_text:
-                await update.message.reply_text("Usage: /broadcast <message>")
-                return
-            recipients = db.get_opted_in_users()
-            sent = 0
-            failed = 0
-            for i in range(0, len(recipients), 25):
-                batch = recipients[i:i+25]
-                tasks = [context.bot.send_message(chat_id=uid, text=message_text) for uid in batch]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        failed += 1
-                    else:
-                        sent += 1
-                await asyncio.sleep(0.5)
-            await update.message.reply_text(f"✅ Broadcast complete. Sent: {sent}, Failed: {failed}.")
-        except Exception as e:
-            logger.error(f"Broadcast error: {e}")
-            try:
-                await update.message.reply_text("An error occurred while broadcasting.")
-            except Exception:
-                pass
 
-    # ========== Admin management ==========
-    async def myid_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        markup = self._back_main_markup(update.effective_chat.type)
-        await update.message.reply_text(
-            f"Your Telegram user ID: {update.effective_user.id}" +
-            ("\n\nUse /menu to open the main menu." if not markup else ""),
-            reply_markup=markup
-        )
 
-    async def admins_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            admin_ids = db.list_admins()
-            if not admin_ids:
-                await update.message.reply_text("No admins configured yet.")
-                return
-            ids_str = "\n".join([str(uid) for uid in admin_ids])
-            await update.message.reply_text(f"Current admins (user IDs):\n{ids_str}")
-        except Exception as e:
-            logger.error(f"/admins error: {e}")
-            await update.message.reply_text("Failed to list admins.")
-
-    async def addadmin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user = update.effective_user
-            if not db.is_admin(user.id) and user.id not in self.admin_ids:
-                await update.message.reply_text("You are not authorized to add admins.")
-                return
-            if not context.args:
-                await update.message.reply_text("Usage: /addadmin <user_id>")
-                return
-            try:
-                target_id = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("Invalid user_id. It must be a number.")
-                return
-            if db.is_admin(target_id):
-                await update.message.reply_text("User is already an admin.")
-                return
-            db.add_admin(target_id, added_by=user.id)
-            await update.message.reply_text(f"✅ Added admin: {target_id}")
-        except Exception as e:
-            logger.error(f"/addadmin error: {e}")
-            await update.message.reply_text("Failed to add admin.")
-
-    async def rmadmin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            user = update.effective_user
-            if not db.is_admin(user.id) and user.id not in self.admin_ids:
-                await update.message.reply_text("You are not authorized to remove admins.")
-                return
-            if not context.args:
-                await update.message.reply_text("Usage: /rmadmin <user_id>")
-                return
-            try:
-                target_id = int(context.args[0])
-            except ValueError:
-                await update.message.reply_text("Invalid user_id. It must be a number.")
-                return
-            if not db.is_admin(target_id):
-                await update.message.reply_text("User is not an admin.")
-                return
-            db.remove_admin(target_id)
-            await update.message.reply_text(f"✅ Removed admin: {target_id}")
-        except Exception as e:
-            logger.error(f"/rmadmin error: {e}")
-            await update.message.reply_text("Failed to remove admin.")
-
-    # ========== Stickers ==========
-    async def photo_to_sticker(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        try:
-            chat = update.effective_chat
-            if chat.type != "private":
-                return
-            photos = update.message.photo
-            if not photos:
-                return
-            best = photos[-1]
-            file = await context.bot.get_file(best.file_id)
-            b = await file.download_as_bytearray()
-            img = Image.open(io.BytesIO(b)).convert("RGBA")
-            max_size = 512
-            img.thumbnail((max_size, max_size))
-            out = io.BytesIO()
-            img.save(out, format="WEBP")
-            out.seek(0)
-            await context.bot.send_sticker(chat_id=chat.id, sticker=out)
-        except Exception as e:
-            logger.error(f"Error converting photo to sticker: {e}")
-            try:
-                await update.effective_chat.send_message("Sorry, I couldn't convert that image to a sticker.")
-            except Exception:
-                pass
+    # ========== Group Message Handlers ==========
 
     async def _group_message_handler_unified(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Unified group message handler: records activity, enforces anti-links and per-media locks
@@ -1229,14 +970,6 @@ class MultipurposeBot:
                 await self.start_create_event(query, context)
             elif data == "help":
                 await self.show_help(query)
-            elif data == "help_tz":
-                await query.edit_message_text("/tz <AFRICA_COUNTRY_CODE> — e.g. /tz NG (Lagos)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="noop")]]))
-            elif data == "help_weather":
-                await query.edit_message_text("/weather <city or country> — e.g. /weather Nairobi", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="noop")]]))
-            elif data == "help_capital":
-                await query.edit_message_text("/capital <AFRICA_COUNTRY_CODE> — e.g. /capital GH", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="noop")]]))
-            elif data == "help_fancy":
-                await query.edit_message_text("/fancy <text> — returns stylized text", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="noop")]]))
             elif data == "my_event_links":
                 await self.show_my_event_links(query, user_id)
             elif data.startswith("event_"):
@@ -2741,46 +2474,6 @@ class MultipurposeBot:
         ])
         return InlineKeyboardMarkup(kb)
 
-    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        query = update.callback_query
-        await query.answer()
-        data = query.data or ''
-        user_id = update.effective_user.id if update.effective_user else None
-        try:
-            if data == 'main_menu':
-                await self.show_main_menu(query, user_id)
-                return
-            if data == 'ref_center':
-                await self.show_referral_center(query, user_id)
-                return
-            if data == 'create_event':
-                await self.start_create_event(query, context)
-                return
-            if data == 'my_events':
-                await self.show_my_events(query, user_id)
-                return
-            if data.startswith('event_link_'):
-                try:
-                    event_id = int(data.split('_', 2)[2])
-                    await self.send_event_link(query, event_id)
-                except Exception:
-                    await query.reply_text('Error generating link.')
-                return
-            if data.startswith('event_'):
-                # Show event info/stats
-                try:
-                    event_id = int(data.split('_', 1)[1])
-                    await self.show_event_stats(query, event_id)
-                except Exception:
-                    await query.reply_text('Event not found.')
-                return
-            if data == 'skip_group_link':
-                await self.skip_group_link(query, context)
-                return
-            # Unknown -> ignore politely
-            await query.answer()
-        except Exception as e:
-            logger.error(f"button_handler error: {e}")
 
     async def group_message_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Thin wrapper kept for backward references; delegates to unified handler.
