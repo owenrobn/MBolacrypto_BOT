@@ -689,67 +689,31 @@ class MultipurposeBot:
                 # Group commands (admin only)
                 group_cmds = [
                     BotCommand('config', 'Group settings'),
-                    BotCommand('antilinks', 'Toggle anti-links'),
-                    BotCommand('setwarns', 'Set warning threshold'),
-                    BotCommand('setmute', 'Set mute duration'),
-                    BotCommand('setautoban', 'Toggle auto-ban'),
-                    BotCommand('setresetwarns', 'Toggle reset warnings'),
-                    BotCommand('warn', 'Warn a user'),
                     BotCommand('mute', 'Mute a user'),
-                    BotCommand('ban', 'Ban a user'),
-                    BotCommand('kick', 'Kick a user'),
-                    BotCommand('unban', 'Unban a user'),
                     BotCommand('unmute', 'Unmute a user'),
-                    BotCommand('warnings', 'Check user warnings'),
-                    BotCommand('resetwarns', 'Reset user warnings'),
+                    BotCommand('ban', 'Ban a user'),
+                    BotCommand('unban', 'Unban a user'),
+                    BotCommand('warn', 'Warn a user'),
+                    BotCommand('kick', 'Kick a user'),
                     BotCommand('rules', 'Show group rules'),
-                    BotCommand('setrules', 'Set group rules (admin only)'),
-                    BotCommand('welcome', 'Toggle welcome message'),
-                    BotCommand('goodbye', 'Toggle goodbye message'),
-                    BotCommand('setwelcome', 'Set welcome message'),
-                    BotCommand('setgoodbye', 'Set goodbye message'),
-                    BotCommand('lock', 'Lock message type'),
-                    BotCommand('unlock', 'Unlock message type'),
-                    BotCommand('locks', 'Show locked message types'),
-                    BotCommand('flood', 'Toggle anti-flood'),
-                    BotCommand('setflood', 'Set flood threshold'),
-                    BotCommand('report', 'Report a user'),
-                    BotCommand('reports', 'List recent reports (admin only)'),
-                    BotCommand('del', 'Delete message and warn user (reply to message)'),
-                    BotCommand('purge', 'Delete multiple messages (admin only)'),
-                    BotCommand('zombies', 'Clean deleted accounts (admin only)'),
-                    BotCommand('pin', 'Pin a message (reply to message)'),
-                    BotCommand('unpin', 'Unpin a message'),
-                    BotCommand('pinned', 'Show pinned message'),
-                    BotCommand('invitelink', 'Get group invite link (admin only)'),
-                    BotCommand('title', 'Set group title (admin only)'),
-                    BotCommand('description', 'Set group description (admin only)'),
-                    BotCommand('setlog', 'Set log channel (admin only)'),
-                    BotCommand('logchannel', 'Show log channel info (admin only)'),
-                    BotCommand('mystats', 'Show your stats'),
-                    BotCommand('top', 'Show top users'),
-                    BotCommand('id', 'Get user/chat ID'),
-                    BotCommand('info', 'Get user/chat info'),
+                    BotCommand('report', 'Report a user')
                 ]
                 
-                # Private chat commands (all users)
+                # Private chat commands
                 private_cmds = [
                     BotCommand('start', 'Start the bot'),
                     BotCommand('help', 'Show help'),
-                    BotCommand('settings', 'User settings'),
-                    BotCommand('mystats', 'Show your referral stats'),
-                    BotCommand('leaderboard', 'Show referral leaderboard'),
+                    BotCommand('mystats', 'Show your stats'),
+                    BotCommand('leaderboard', 'Show leaderboard'),
                     BotCommand('myevents', 'Show your events'),
                     BotCommand('newevent', 'Create a new event'),
-                    BotCommand('myrefs', 'Show your referral links'),
+                    BotCommand('myrefs', 'Show your referral links')
                 ]
                 
-                # Admin-only private commands
+                # Admin commands (only shown to admins in private chats)
                 admin_cmds = [
-                    BotCommand('broadcast', 'Broadcast message to all users (admin only)'),
-                    BotCommand('addadmin', 'Add admin (owner only)'),
-                    BotCommand('rmadmin', 'Remove admin (owner only)'),
-                    BotCommand('admins', 'List admins'),
+                    BotCommand('broadcast', 'Broadcast message to all users'),
+                    BotCommand('admins', 'List bot admins')
                 ]
                 
                 # Set commands for group chats
@@ -811,55 +775,65 @@ class MultipurposeBot:
         application.add_error_handler(self.error_handler)
         
         # Start the bot
-        logger.info("Starting bot...")
-        application.run_polling(drop_pending_updates=True)
+        # Register all handlers before starting the bot
+        self._register_handlers(application)
         
         # Keep reference for logging helper
         self.app = application
-
+        
+        logger.info("🚀 Multipurpose bot is starting...")
+        application.run_polling(drop_pending_updates=True)
+        
+    def _register_handlers(self, application):
+        """Register all command and message handlers."""
         # Core commands
         application.add_handler(CommandHandler('start', self.start))
         application.add_handler(CommandHandler('help', self.help_command))
         application.add_handler(CommandHandler('menu', self.menu_command))
-        application.add_handler(CommandHandler('refreshcommands', self.refreshcommands_command))
         
         # Group management commands
-        application.add_handler(CommandHandler('config', self.group_config_command))
-        application.add_handler(CommandHandler('antilinks', self.antilinks_command))
-        application.add_handler(CommandHandler('setwarns', self.setwarns_command))
-        application.add_handler(CommandHandler('setmute', self.setmute_command))
-        application.add_handler(CommandHandler('setautoban', self.setautoban_command))
-        application.add_handler(CommandHandler('setresetwarns', self.setresetwarns_command))
-        
-        # Moderation commands
-        application.add_handler(CommandHandler('warn', self.warn_command))
         application.add_handler(CommandHandler('mute', self.mute_command))
+        application.add_handler(CommandHandler('unmute', self.unmute_command))
         application.add_handler(CommandHandler('ban', self.ban_command))
+        application.add_handler(CommandHandler('unban', self.unban_command))
+        application.add_handler(CommandHandler('warn', self.warn_command))
         application.add_handler(CommandHandler('kick', self.kick_command))
-        application.add_handler(CommandHandler('purge', self.purge_command))
-        
-        # Info commands
         application.add_handler(CommandHandler('rules', self.rules_command))
         application.add_handler(CommandHandler('report', self.report_command))
-        application.add_handler(CommandHandler('leaderboard', self.group_leaderboard_command))
+        application.add_handler(CommandHandler('gleaderboard', self.group_leaderboard_command))
+        
+        # User commands
+        application.add_handler(CommandHandler('mystats', self.show_my_stats))
+        application.add_handler(CommandHandler('leaderboard', self.show_leaderboard_cmd))
+        application.add_handler(CommandHandler('myevents', self.my_events_cmd))
+        application.add_handler(CommandHandler('newevent', self.new_event_cmd))
+        application.add_handler(CommandHandler('myrefs', self.my_refs_cmd))
+        application.add_handler(CommandHandler('end_event', self.end_event_command))
+        
+        # Admin commands
+        application.add_handler(CommandHandler('broadcast', self.broadcast_command))
+        application.add_handler(CommandHandler('admins', self.list_admins_command))
         
         # Callback handlers
         application.add_handler(CallbackQueryHandler(self.button_handler))
-        application.add_handler(CallbackQueryHandler(self.group_config_callback, pattern=r'^gc:'))
-        application.add_handler(CallbackQueryHandler(self.approval_callback, pattern=r'^approve:'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^ref_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^event_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^create_event_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^set_group_link_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^skip_group_link_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^join_event_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^get_ref_link_'))
+        application.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^back_to_menu$'))
         
         # Message handlers
-        application.add_handler(MessageHandler(filters.StatusUpdate.ALL, self._service_message_handler))  # Service messages
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         application.add_handler(MessageHandler(
             filters.ChatType.GROUPS & (filters.ALL),
             self._group_message_handler_unified
         ))
-        # Member updates for welcome/goodbye
+        application.add_handler(MessageHandler(filters.StatusUpdate.ALL, self._service_message_handler))
         application.add_handler(ChatMemberHandler(self.chat_member_update, ChatMemberHandler.CHAT_MEMBER))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
         application.add_error_handler(self.error_handler)
-
-        logger.info("🚀 Multipurpose bot is starting...")
 
         port = os.getenv("PORT")
         webhook_url = os.getenv("WEBHOOK_URL")
