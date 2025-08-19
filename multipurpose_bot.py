@@ -730,34 +730,8 @@ class MultipurposeBot:
                 
                 logger.info("Bot commands set successfully")
                 
-                # Add handlers for referral and event management
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^ref_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^event_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^create_event_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^set_group_link_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^skip_group_link_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^join_event_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^get_ref_link_'))
-                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^back_to_menu$'))
-                
-                # Add command handlers
-                app.add_handler(CommandHandler('mystats', self.show_my_stats))
-                app.add_handler(CommandHandler('leaderboard', self.show_leaderboard_cmd))
-                app.add_handler(CommandHandler('myevents', self.my_events_cmd))
-                app.add_handler(CommandHandler('newevent', self.new_event_cmd))
-                app.add_handler(CommandHandler('myrefs', self.my_refs_cmd))
-                app.add_handler(CommandHandler('end_event', self.end_event_command))
-                
-                # Admin commands
-                app.add_handler(CommandHandler('broadcast', self.broadcast_command))
-                app.add_handler(CommandHandler('addadmin', self.add_admin_command))
-                app.add_handler(CommandHandler('rmadmin', self.remove_admin_command))
-                app.add_handler(CommandHandler('admins', self.list_admins_command))
-                
-                # Text message handler for event creation flow
-                app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
-                
-                logger.info("Referral and event handlers added successfully")
+                # All handlers are now registered in _register_handlers
+                logger.info("Bot setup completed successfully")
                 
             except Exception as e:
                 logger.error(f"Failed to set up bot: {e}", exc_info=True)
@@ -1790,10 +1764,12 @@ class MultipurposeBot:
     # ===== Phase 2: Group moderation helpers and commands =====
 
     async def _is_group_admin(self, bot, chat_id: int, user_id: int) -> bool:
+        """Return True if user_id is an admin of chat_id."""
         try:
             admins = await bot.get_chat_administrators(chat_id)
             return user_id in {a.user.id for a in admins}
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error checking admin status: {e}")
             return False
 
     async def _has_immunity(self, bot, chat_id: int, target_id: int, issuer_id: int) -> tuple[bool, str]:
@@ -2054,6 +2030,77 @@ class MultipurposeBot:
             await self._log(chat_id, f"[BAN] {target.id} by {issuer}")
         except Exception:
             pass
+
+    async def unban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Unban a user from the group."""
+        chat = update.effective_chat
+        user = update.effective_user
+        
+        # Check if command is used in a group
+        if chat.type not in ['group', 'supergroup']:
+            await update.message.reply_text("This command can only be used in groups.")
+            return
+            
+        # Check if user has permission to unban
+        if not await self._is_group_admin(context.bot, chat.id, user.id):
+            await update.message.reply_text("You need to be an admin to use this command.")
+            return
+            
+        # Check if command has arguments (user ID or username)
+        if not context.args:
+            await update.message.reply_text("Please specify a user ID or reply to a user's message to unban them.")
+            return
+            
+        # Get target user from arguments
+        target = ' '.join(context.args)
+        
+        try:
+            # Try to unban by user ID
+            try:
+                user_id = int(target)
+            except ValueError:
+                # If not a number, try to resolve username
+                if target.startswith('@'):
+                    target = target[1:]  # Remove @ if present
+                user_id = await self._resolve_username_to_id(update, target)
+                if not user_id:
+                    await update.message.reply_text("Could not find user. Please provide a valid user ID or username.")
+                    return
+            
+            # Unban the user
+            await context.bot.unban_chat_member(
+                chat_id=chat.id,
+                user_id=user_id
+            )
+            
+            # Send confirmation
+            await update.message.reply_text(
+                f"✅ User has been unbanned."
+                f"\nUnbanned by: {user.mention_markdown_v2()}",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            
+            # Log the action
+            logger.info(f"User {user_id} was unbanned by {user.id} in chat {chat.id}")
+            
+        except Exception as e:
+            logger.error(f"Error unbanning user: {e}")
+            await update.message.reply_text("Failed to unban user. Please check the user ID and try again.")
+    
+    async def _resolve_username_to_id(self, update: Update, username: str) -> int:
+        """Helper method to resolve username to user ID."""
+        # This is a simplified version - in a real implementation, you might want to
+        # check the chat members or maintain a user cache
+        try:
+            # Try to get user info by username
+            chat = update.effective_chat
+            members = await chat.get_member_count()
+            # Note: This is a placeholder - you'll need to implement actual user lookup
+            # based on your bot's architecture and requirements
+            return None  # Return None if user not found
+        except Exception as e:
+            logger.error(f"Error resolving username {username}: {e}")
+            return None
 
     async def tban_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_chat.type not in ['group', 'supergroup']:
