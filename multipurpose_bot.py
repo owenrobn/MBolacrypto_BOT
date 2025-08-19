@@ -48,28 +48,584 @@ class MultipurposeBot:
         admin_ids_env = os.getenv('ADMIN_IDS', '')
         try:
             self.admin_ids = {int(x.strip()) for x in admin_ids_env.split(',') if x.strip()}
-        except Exception:
-            self.admin_ids = set()
-        if self.admin_ids:
+            # Seed admins in database
             try:
-                db.seed_admins(sorted(list(self.admin_ids)))
+                if self.admin_ids:
+                    db.seed_admins(sorted(list(self.admin_ids)))
             except Exception as e:
                 logger.warning(f"Admin seed failed: {e}")
-
-        # Log PTB version
-        try:
-            import telegram
-            ptb_ver = getattr(telegram, '__version__', 'unknown')
-        except Exception:
-            ptb_ver = 'unknown'
+        except Exception as e:
+            logger.warning(f"Error parsing admin IDs: {e}")
+            self.admin_ids = set()
+            
+        # Log PTB version and module paths to verify runtime dependency
+        ptb_ver = getattr(telegram, '__version__', 'unknown')
         logger.info(f"python-telegram-bot version: {ptb_ver}")
+        logger.info(f"telegram module file: {getattr(telegram, '__file__', 'unknown')}")
         logger.info(f"telegram.ext module file: {getattr(tg_ext, '__file__', 'unknown')}")
-
+        
+        # Guard: require PTB 20.x
+        try:
+            major = int(str(ptb_ver).split('.')[0]) if ptb_ver not in (None, 'unknown') else None
+        except Exception:
+            major = None
+        if major is None or major < 20:
+            raise RuntimeError(
+                f"Incompatible python-telegram-bot version detected: {ptb_ver}. "
+                "Please ensure PTB 20.x is installed (requirements.txt pins 20.8)."
+            )
+            
+        logger.info(f"Bot initialized with username: {self.bot_username}")
+        
         # In-memory state for anti-flood tracking: (chat_id, user_id) -> list[timestamps]
         self._flood_window: Dict[tuple, List[float]] = {}
         # In-memory: recent captcha messages to clean
         self._pending_captcha: Dict[tuple, int] = {}
 
+    def is_valid_telegram_link(self, link: str) -> bool:
+        """Validate if the provided link is a valid Telegram group/channel link."""
+        telegram_patterns = [
+            r'^https://t\.me/[a-zA-Z0-9_]+$',  # Public groups/channels
+            r'^https://t\.me/joinchat/[a-zA-Z0-9_-]+$',  # Private groups via invite link
+            r'^https://t\.me/\+[a-zA-Z0-9_-]+$',  # New format private groups
+            r'^@[a-zA-Z0-9_]+$'  # Username format
+        ]
+        
+        if not link:
+            return False
+            
+        for pattern in telegram_patterns:
+            if re.match(pattern, link.strip()):
+                return True
+        return False
+        
+    # ========== Referral and Event Management ==========
+    async def show_my_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user's referral statistics."""
+        user = update.effective_user
+        user_data = db.get_user(user.id)
+        
+        if not user_data:
+            # If user doesn't exist in database, add them
+            referral_code = db.add_user(
+                user_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+            user_data = db.get_user(user.id)
+        
+        # Get user's referral stats
+        stats = db.get_user_referrals_in_event(user.id, None)  # None for global stats
+        
+        # Format the message
+        message = f"👤 *Your Referral Stats*\n\n"
+        message += f"• Your Referral Code: `{user_data['referral_code']}`\n"
+        message += f"• Total Referrals: {stats.get('total_referrals', 0)}\n"
+        
+        if stats.get('recent_referrals'):
+            message += "\n*Recent Referrals:*\n"
+            for ref in stats['recent_referrals']:
+                message += f"• {ref['first_name']} ({ref['joined_at']})\n"
+        
+        # Add buttons for more actions
+        keyboard = [
+            [InlineKeyboardButton("📊 Show Leaderboard", callback_data="leaderboard")],
+            [InlineKeyboardButton("📝 My Events", callback_data="my_events")],
+            [InlineKeyboardButton("🔗 My Referral Links", callback_data="my_refs")]
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=reply_markup
+        )
+        
+    async def show_leaderboard_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show the global referral leaderboard."""
+        # Get top referrers
+        leaderboard = db.get_referral_leaderboard()
+        
+        message = "🏆 *Referral Leaderboard*\n\n"
+        
+        if not leaderboard:
+            message += "No referrals yet. Be the first to invite friends!"
+        else:
+            for i, entry in enumerate(leaderboard[:10], 1):
+                name = entry.get('first_name', 'Unknown')
+                if entry.get('username'):
+                    name = f"@{entry['username']} ({name})"
+                message += f"{i}. {name}: {entry.get('referral_count', 0)} referrals\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]
+        ]
+        
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    async def my_events_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show events created by the user."""
+        user = update.effective_user
+        events = db.get_user_events(user.id)
+        
+        if not events:
+            message = "You haven't created any events yet.\n\n"
+            message += "Create your first event with /newevent"
+            
+            keyboard = [
+                [InlineKeyboardButton("➕ Create Event", callback_data="create_event")],
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]
+            ]
+            
+            await update.message.reply_text(
+                message,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+            
+        message = "📅 *Your Events*\n\n"
+        
+        for i, event in enumerate(events, 1):
+            status = "🟢 Active" if event.get('is_active', True) else "🔴 Ended"
+            message += f"{i}. {event['title']} ({status})\n"
+            if event.get('group_link'):
+                message += f"   🔗 Group: {event['group_link']}\n"
+            message += f"   👥 Participants: {event.get('participant_count', 0)}\n"
+            message += f"   📊 /stats_{event['event_code']}\n\n"
+        
+        keyboard = [
+            [InlineKeyboardButton("➕ Create New Event", callback_data="create_event")],
+            [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]
+        ]
+        
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    async def new_event_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Start the event creation process."""
+        user = update.effective_user
+        context.user_data['creating_event'] = True
+        context.user_data['event_step'] = 'title'
+        
+        await update.message.reply_text(
+            "Let's create a new event!\n\n"
+            "Please enter a title for your event:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]
+            ])
+        )
+        
+    async def my_refs_cmd(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Show user's referral links for their events."""
+        user = update.effective_user
+        events = db.get_user_events(user.id)
+        
+        if not events:
+            await update.message.reply_text(
+                "You don't have any events yet. Create one with /newevent"
+            )
+            return
+            
+        message = "🔗 *Your Referral Links*\n\n"
+        
+        for event in events:
+            ref_link = f"https://t.me/{self.bot_username}?start=ref_{user.id}_{event['event_code']}"
+            message += f"*{event['title']}*\n"
+            message += f"`{ref_link}`\n\n"
+        
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")]
+            ])
+        )
+    
+    # ========== Admin Commands ==========
+    async def broadcast_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Broadcast a message to all users (admin only)."""
+        user = update.effective_user
+        
+        # Check if user is admin
+        if user.id not in self.admin_ids:
+            await update.message.reply_text("❌ Only admins can use this command.")
+            return
+            
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /broadcast <message>"
+            )
+            return
+            
+        message = ' '.join(context.args)
+        users = db.get_all_users()
+        
+        success = 0
+        failed = 0
+        
+        for user_data in users:
+            try:
+                await context.bot.send_message(
+                    chat_id=user_data['user_id'],
+                    text=f"📢 *Announcement*\n\n{message}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                success += 1
+            except Exception as e:
+                logger.warning(f"Failed to send broadcast to {user_data['user_id']}: {e}")
+                failed += 1
+                
+        await update.message.reply_text(
+            f"✅ Broadcast sent to {success} users. Failed: {failed}"
+        )
+    
+    async def add_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Add a user as admin (owner only)."""
+        user = update.effective_user
+        
+        # Only allow the first admin (owner) to add other admins
+        if user.id != next(iter(self.admin_ids or []), None):
+            await update.message.reply_text("❌ Only the bot owner can add admins.")
+            return
+            
+        if not context.args:
+            await update.message.reply_text("Usage: /addadmin <user_id>")
+            return
+            
+        try:
+            new_admin_id = int(context.args[0])
+            db.add_admin(new_admin_id, added_by=user.id)
+            self.admin_ids.add(new_admin_id)
+            await update.message.reply_text(f"✅ User {new_admin_id} added as admin.")
+        except (ValueError, IndexError):
+            await update.message.reply_text("❌ Invalid user ID.")
+        except Exception as e:
+            logger.error(f"Error adding admin: {e}")
+            await update.message.reply_text("❌ Failed to add admin.")
+    
+    async def remove_admin_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Remove a user from admins (owner only)."""
+        user = update.effective_user
+        
+        # Only allow the first admin (owner) to remove other admins
+        if user.id != next(iter(self.admin_ids or []), None):
+            await update.message.reply_text("❌ Only the bot owner can remove admins.")
+            return
+            
+        if not context.args:
+            await update.message.reply_text("Usage: /rmadmin <user_id>")
+            return
+            
+        try:
+            admin_id = int(context.args[0])
+            if admin_id == user.id:
+                await update.message.reply_text("❌ You cannot remove yourself as admin.")
+                return
+                
+            db.remove_admin(admin_id)
+            self.admin_ids.discard(admin_id)
+            await update.message.reply_text(f"✅ User {admin_id} removed from admins.")
+        except (ValueError, IndexError):
+            await update.message.reply_text("❌ Invalid user ID.")
+        except Exception as e:
+            logger.error(f"Error removing admin: {e}")
+            await update.message.reply_text("❌ Failed to remove admin.")
+    
+    async def list_admins_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """List all bot admins."""
+        admins = db.get_all_admins()
+        
+        if not admins:
+            await update.message.reply_text("No admins found.")
+            return
+            
+        message = "👑 *Bot Admins*\n\n"
+        
+        for admin in admins:
+            name = admin.get('first_name', 'Unknown')
+            if admin.get('username'):
+                name = f"@{admin['username']} ({name})"
+            message += f"• {name} (`{admin['user_id']}`)\n"
+            if admin.get('added_by'):
+                added_by = db.get_user(admin['added_by'])
+                if added_by:
+                    message += f"  Added by: {added_by.get('first_name', 'Unknown')} (@{added_by.get('username', 'N/A')})\n"
+            message += "\n"
+            
+        await update.message.reply_text(
+            message,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    # ========== Event Management ==========
+    async def end_event_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """End an event (event owner or admin only)."""
+        user = update.effective_user
+        
+        if not context.args:
+            await update.message.reply_text(
+                "Usage: /end_event <event_code>\n\n"
+                "Use /myevents to see your event codes."
+            )
+            return
+            
+        event_code = context.args[0].upper()
+        event = db.get_event_by_code(event_code)
+        
+        if not event:
+            await update.message.reply_text("❌ Event not found.")
+            return
+            
+        # Check if user is the event owner or an admin
+        if event['created_by'] != user.id and user.id not in self.admin_ids:
+            await update.message.reply_text("❌ Only the event owner or an admin can end this event.")
+            return
+            
+        if not event['is_active']:
+            await update.message.reply_text("❌ This event has already ended.")
+            return
+            
+        # End the event
+        db.end_event(event_code)
+        
+        # Notify participants
+        participants = db.get_event_participants(event_code)
+        for participant in participants:
+            try:
+                await context.bot.send_message(
+                    chat_id=participant['user_id'],
+                    text=f"🏁 *Event Ended*\n\n"
+                         f"The event *{event['title']}* has ended.\n\n"
+                         f"Thank you for participating! 🎉"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to notify participant {participant['user_id']}: {e}")
+        
+        await update.message.reply_text(
+            f"✅ Event *{event['title']}* has been ended.\n\n"
+            f"Participants notified: {len(participants)}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle all button callbacks."""
+        query = update.callback_query
+        await query.answer()
+        
+        user = update.effective_user
+        data = query.data
+        
+        # Handle different button callbacks
+        if data == 'main_menu':
+            await self.show_main_menu(update, context)
+            
+        elif data == 'leaderboard':
+            await self.show_leaderboard_cmd(update, context)
+            
+        elif data == 'my_events':
+            await self.my_events_cmd(update, context)
+            
+        elif data == 'my_refs':
+            await self.my_refs_cmd(update, context)
+            
+        elif data == 'create_event':
+            await self.new_event_cmd(update, context)
+            
+        elif data.startswith('join_event_'):
+            event_code = data.split('_', 2)[2]
+            await self.join_event(update, context, event_code)
+            
+        elif data.startswith('get_ref_link_'):
+            event_code = data.split('_', 3)[3]
+            await self.get_ref_link(update, context, event_code)
+            
+        elif data.startswith('set_group_link_'):
+            event_code = data.split('_', 3)[3]
+            context.user_data['setting_group_link'] = event_code
+            await query.edit_message_text(
+                "🔗 Please send me the group invite link:",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("❌ Cancel", callback_data=f"event_{event_code}")]
+                ])
+            )
+            
+        elif data.startswith('skip_group_link_'):
+            event_code = data.split('_', 3)[3]
+            await self.create_event_finalize(update, context, event_code, None)
+            
+        # Handle other button callbacks...
+        
+    async def join_event(self, update: Update, context: ContextTypes.DEFAULT_TYPE, event_code: str):
+        """Handle joining an event."""
+        query = update.callback_query
+        user = update.effective_user
+        
+        event = db.get_event_by_code(event_code)
+        if not event or not event['is_active']:
+            await query.edit_message_text("❌ This event is no longer available.")
+            return
+            
+        # Check if user is already a participant
+        if db.is_user_in_event(user.id, event_code):
+            await query.edit_message_text(
+                f"✅ You're already participating in *{event['title']}*!\n\n"
+                f"Use this link to invite others:\n"
+                f"`https://t.me/{self.bot_username}?start=ref_{user.id}_{event_code}`",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+            
+        # Add user to event
+        db.add_participant(user.id, event_code)
+        
+        # Send confirmation
+        await query.edit_message_text(
+            f"🎉 You've joined *{event['title']}*!\n\n"
+            f"Invite others using this link:\n"
+            f"`https://t.me/{self.bot_username}?start=ref_{user.id}_{event_code}`\n\n"
+            f"Share it with your friends to earn more points!",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 View My Stats", callback_data="mystats")],
+                [InlineKeyboardButton("🏆 Leaderboard", callback_data="leaderboard")]
+            ])
+        )
+        
+        # Notify event creator
+        try:
+            await context.bot.send_message(
+                chat_id=event['created_by'],
+                text=f"👋 New participant in *{event['title']}*:\n"
+                     f"👤 {user.first_name} (@{user.username or 'N/A'})\n"
+                     f"Total participants: {db.get_event_participant_count(event_code)}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.warning(f"Failed to notify event creator: {e}")
+    
+    async def get_ref_link(self, update: Update, context: ContextTypes.DEFAULT_TYPE, event_code: str):
+        """Get referral link for an event."""
+        query = update.callback_query
+        user = update.effective_user
+        
+        event = db.get_event_by_code(event_code)
+        if not event or not event['is_active']:
+            await query.edit_message_text("❌ This event is no longer available.")
+            return
+            
+        ref_link = f"https://t.me/{self.bot_username}?start=ref_{user.id}_{event_code}"
+        
+        await query.edit_message_text(
+            f"🔗 *Your Referral Link*\n\n"
+            f"Share this link to invite others to *{event['title']}*:\n\n"
+            f"`{ref_link}`\n\n"
+            f"For each person who joins using your link, you'll earn points!",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📤 Share Link", url=f"https://t.me/share/url?url={ref_link}&text=Join%20{event['title']}%20on%20Telegram!")],
+                [InlineKeyboardButton("🔙 Back to Event", callback_data=f"event_{event_code}")]
+            ])
+        )
+    
+    async def create_event_finalize(self, update: Update, context: ContextTypes.DEFAULT_TYPE, event_code: str, group_link: str = None):
+        """Finalize event creation with optional group link."""
+        if 'creating_event' not in context.user_data:
+            await update.message.reply_text("No event creation in progress.")
+            return
+            
+        event = db.get_event_by_code(event_code)
+        if not event:
+            await update.message.reply_text("Event not found.")
+            return
+            
+        # Update event with group link if provided
+        if group_link:
+            db.update_event(event_code, {'group_link': group_link})
+            event['group_link'] = group_link
+            
+        # Clear creation state
+        del context.user_data['creating_event']
+        if 'event_step' in context.user_data:
+            del context.user_data['event_step']
+            
+        # Send success message
+        message = f"🎉 *Event Created!*\n\n"
+        message += f"*Title:* {event['title']}\n"
+        if event.get('description'):
+            message += f"*Description:* {event['description']}\n"
+        if event.get('group_link'):
+            message += f"*Group Link:* {event['group_link']}\n"
+        message += "\nShare this link to invite participants:\n"
+        ref_link = f"https://t.me/{self.bot_username}?start=ref_{update.effective_user.id}_{event_code}"
+        
+        await update.message.reply_text(
+            f"{message}`{ref_link}`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("📤 Share Event", url=f"https://t.me/share/url?url={ref_link}&text=Join%20{event['title']}%20on%20Telegram!")],
+                [InlineKeyboardButton("📊 View Event", callback_data=f"event_{event_code}")]
+            ])
+        )
+    
+    async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle text messages during event creation flow."""
+        if 'creating_event' not in context.user_data:
+            return
+            
+        user = update.effective_user
+        text = update.message.text
+        
+        if context.user_data.get('event_step') == 'title':
+            # Create a new event
+            event_code = db.create_event(
+                title=text,
+                created_by=user.id,
+                is_active=True
+            )
+            
+            if not event_code:
+                await update.message.reply_text("❌ Failed to create event. Please try again.")
+                return
+                
+            context.user_data['event_code'] = event_code
+            context.user_data['event_step'] = 'group_link'
+            
+            await update.message.reply_text(
+                "🔗 *Optional:* Would you like to add a group link for this event?\n\n"
+                "This will allow participants to join your group after joining the event.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Yes, add group link", callback_data=f"set_group_link_{event_code}")],
+                    [InlineKeyboardButton("⏩ Skip for now", callback_data=f"skip_group_link_{event_code}")],
+                    [InlineKeyboardButton("❌ Cancel", callback_data="main_menu")]
+                ])
+            )
+            
+        elif context.user_data.get('event_step') == 'group_link' and context.user_data.get('setting_group_link'):
+            # Handle group link input
+            event_code = context.user_data['setting_group_link']
+            
+            if not self.is_valid_telegram_link(text):
+                await update.message.reply_text(
+                    "❌ Invalid Telegram group link. Please provide a valid link or skip this step.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⏩ Skip group link", callback_data=f"skip_group_link_{event_code}")]
+                    ])
+                )
+                return
+                
+            # Save group link and finalize
+            await self.create_event_finalize(update, context, event_code, text)
+            
     # ========== Helpers ==========
     def _back_main_markup(self, chat_type: str):
         """Inline back-to-main button for private chats only."""
@@ -127,6 +683,7 @@ class MultipurposeBot:
                 logger.info("Webhook deleted (if existed)")
             except Exception as e:
                 logger.warning(f"delete_webhook failed: {e}")
+                
             # Set bot commands for better UX in chats
             try:
                 # Group commands (admin only)
@@ -141,36 +698,106 @@ class MultipurposeBot:
                     BotCommand('mute', 'Mute a user'),
                     BotCommand('ban', 'Ban a user'),
                     BotCommand('kick', 'Kick a user'),
-                    BotCommand('purge', 'Delete messages'),
+                    BotCommand('unban', 'Unban a user'),
+                    BotCommand('unmute', 'Unmute a user'),
+                    BotCommand('warnings', 'Check user warnings'),
+                    BotCommand('resetwarns', 'Reset user warnings'),
                     BotCommand('rules', 'Show group rules'),
-                    BotCommand('report', 'Report a user/message')
+                    BotCommand('setrules', 'Set group rules (admin only)'),
+                    BotCommand('welcome', 'Toggle welcome message'),
+                    BotCommand('goodbye', 'Toggle goodbye message'),
+                    BotCommand('setwelcome', 'Set welcome message'),
+                    BotCommand('setgoodbye', 'Set goodbye message'),
+                    BotCommand('lock', 'Lock message type'),
+                    BotCommand('unlock', 'Unlock message type'),
+                    BotCommand('locks', 'Show locked message types'),
+                    BotCommand('flood', 'Toggle anti-flood'),
+                    BotCommand('setflood', 'Set flood threshold'),
+                    BotCommand('report', 'Report a user'),
+                    BotCommand('reports', 'List recent reports (admin only)'),
+                    BotCommand('del', 'Delete message and warn user (reply to message)'),
+                    BotCommand('purge', 'Delete multiple messages (admin only)'),
+                    BotCommand('zombies', 'Clean deleted accounts (admin only)'),
+                    BotCommand('pin', 'Pin a message (reply to message)'),
+                    BotCommand('unpin', 'Unpin a message'),
+                    BotCommand('pinned', 'Show pinned message'),
+                    BotCommand('invitelink', 'Get group invite link (admin only)'),
+                    BotCommand('title', 'Set group title (admin only)'),
+                    BotCommand('description', 'Set group description (admin only)'),
+                    BotCommand('setlog', 'Set log channel (admin only)'),
+                    BotCommand('logchannel', 'Show log channel info (admin only)'),
+                    BotCommand('mystats', 'Show your stats'),
+                    BotCommand('top', 'Show top users'),
+                    BotCommand('id', 'Get user/chat ID'),
+                    BotCommand('info', 'Get user/chat info'),
                 ]
                 
-                # Private chat commands
+                # Private chat commands (all users)
                 private_cmds = [
                     BotCommand('start', 'Start the bot'),
-                    BotCommand('menu', 'Open main menu'),
                     BotCommand('help', 'Show help'),
-                    BotCommand('leaderboard', 'Show leaderboard')
+                    BotCommand('settings', 'User settings'),
+                    BotCommand('mystats', 'Show your referral stats'),
+                    BotCommand('leaderboard', 'Show referral leaderboard'),
+                    BotCommand('myevents', 'Show your events'),
+                    BotCommand('newevent', 'Create a new event'),
+                    BotCommand('myrefs', 'Show your referral links'),
                 ]
                 
-                # Clear all existing commands first
-                await app.bot.delete_my_commands(scope=BotCommandScopeAllGroupChats())
-                await app.bot.delete_my_commands(scope=BotCommandScopeAllPrivateChats())
-                await app.bot.delete_my_commands(scope=BotCommandScopeDefault())
+                # Admin-only private commands
+                admin_cmds = [
+                    BotCommand('broadcast', 'Broadcast message to all users (admin only)'),
+                    BotCommand('addadmin', 'Add admin (owner only)'),
+                    BotCommand('rmadmin', 'Remove admin (owner only)'),
+                    BotCommand('admins', 'List admins'),
+                ]
                 
-                # Add a small delay to ensure commands are cleared
-                import asyncio
-                await asyncio.sleep(1)
+                # Set commands for group chats
+                await app.bot.set_my_commands(
+                    commands=group_cmds,
+                    scope=BotCommandScopeAllGroupChats()
+                )
                 
-                # Set new commands
-                await app.bot.set_my_commands(group_cmds, scope=BotCommandScopeAllGroupChats())
-                await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeAllPrivateChats())
-                await app.bot.set_my_commands(private_cmds, scope=BotCommandScopeDefault())
+                # Set commands for private chats (combine regular and admin commands)
+                await app.bot.set_my_commands(
+                    commands=private_cmds + admin_cmds,
+                    scope=BotCommandScopeAllPrivateChats()
+                )
                 
-                logger.info("Bot commands have been updated")
+                logger.info("Bot commands set successfully")
+                
+                # Add handlers for referral and event management
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^ref_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^event_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^create_event_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^set_group_link_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^skip_group_link_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^join_event_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^get_ref_link_'))
+                app.add_handler(CallbackQueryHandler(self.button_handler, pattern=r'^back_to_menu$'))
+                
+                # Add command handlers
+                app.add_handler(CommandHandler('mystats', self.show_my_stats))
+                app.add_handler(CommandHandler('leaderboard', self.show_leaderboard_cmd))
+                app.add_handler(CommandHandler('myevents', self.my_events_cmd))
+                app.add_handler(CommandHandler('newevent', self.new_event_cmd))
+                app.add_handler(CommandHandler('myrefs', self.my_refs_cmd))
+                app.add_handler(CommandHandler('end_event', self.end_event_command))
+                
+                # Admin commands
+                app.add_handler(CommandHandler('broadcast', self.broadcast_command))
+                app.add_handler(CommandHandler('addadmin', self.add_admin_command))
+                app.add_handler(CommandHandler('rmadmin', self.remove_admin_command))
+                app.add_handler(CommandHandler('admins', self.list_admins_command))
+                
+                # Text message handler for event creation flow
+                app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message))
+                
+                logger.info("Referral and event handlers added successfully")
+                
             except Exception as e:
-                logger.error(f"Failed to set bot commands: {e}", exc_info=True)
+                logger.error(f"Failed to set up bot: {e}", exc_info=True)
+                raise
 
         application = (
             Application.builder()
@@ -179,7 +806,15 @@ class MultipurposeBot:
             .concurrent_updates(True)
             .build()
         )
-        # keep reference for logging helper
+        
+        # Add error handler
+        application.add_error_handler(self.error_handler)
+        
+        # Start the bot
+        logger.info("Starting bot...")
+        application.run_polling(drop_pending_updates=True)
+        
+        # Keep reference for logging helper
         self.app = application
 
         # Core commands
