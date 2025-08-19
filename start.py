@@ -8,6 +8,8 @@ import sys
 import logging
 import atexit
 import signal
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from multipurpose_bot import MultipurposeBot
 
 # Configure logging for production
@@ -61,7 +63,25 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Simple HTTP server for Render health checks
+    class HealthCheckHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+    
+    def run_http_server():
+        port = int(os.environ.get('PORT', 10000))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        logger.info(f'Starting health check server on port {port}...')
+        server.serve_forever()
+    
     try:
+        # Start HTTP server in a separate thread
+        http_thread = threading.Thread(target=run_http_server, daemon=True)
+        http_thread.start()
+        
         logger.info("🚀 Starting bot...")
         # Initialize and run bot
         bot_instance = MultipurposeBot()
