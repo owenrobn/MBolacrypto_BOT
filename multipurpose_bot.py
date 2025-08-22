@@ -9,7 +9,9 @@ import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand, BotCommandScopeAllGroupChats, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler, ChatMemberHandler
 from telegram.constants import ParseMode
-from database import Database  # Add this import
+
+# Import Database from same directory (script-mode)
+from database import Database
 
 # Enable logging
 logging.basicConfig(
