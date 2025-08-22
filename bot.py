@@ -5,7 +5,13 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, List
 
-from telegram import Update, ChatPermissions, BotCommand, BotCommandScopeAllGroupChats
+from telegram import (
+    Update,
+    ChatPermissions,
+    BotCommand,
+    BotCommandScopeAllGroupChats,
+    BotCommandScopeAllPrivateChats,
+)
 from telegram.ext import Application, CommandHandler, MessageHandler, ChatMemberHandler, ContextTypes, filters
 
 logger = logging.getLogger(__name__)
@@ -94,7 +100,10 @@ class FreshBot:
                 BotCommand("activity", "Active members: /activity [day|week|month|all]"),
                 BotCommand("stats", "Your stats & referrals"),
             ]
+            # Apply to all scopes to overwrite any legacy command menus
+            await app.bot.set_my_commands(commands)  # default scope
             await app.bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+            await app.bot.set_my_commands(commands, scope=BotCommandScopeAllPrivateChats())
         except Exception as e:
             logger.warning(f"Failed to set group commands: {e}")
 
