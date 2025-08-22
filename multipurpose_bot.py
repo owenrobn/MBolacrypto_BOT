@@ -19,11 +19,24 @@ logger = logging.getLogger(__name__)
 
 class MultipurposeBot:
     def __init__(self):
+        """Initialize the bot with token from environment variables."""
         self.bot_token = os.getenv('BOT_TOKEN')
-        self.bot_username = os.getenv('BOT_USERNAME')
+        if not self.bot_token:
+            raise ValueError("BOT_TOKEN environment variable is not set")
+            
+        self.bot_username = os.getenv('BOT_USERNAME', '').lstrip('@')
+        self.admin_ids = [int(id_.strip()) for id_ in os.getenv('ADMIN_IDS', '').split(',') if id_.strip().isdigit()]
         
-        if not self.bot_token or not self.bot_username:
-            raise ValueError("BOT_TOKEN and BOT_USERNAME must be set in environment")
+        # Initialize the application
+        self.app = Application.builder().token(self.bot_token).build()
+        
+        # Add all command and message handlers
+        self.add_handlers()
+        
+        # Initialize database
+        self.db_path = os.getenv('DB_PATH', 'bot_data.db')
+        self.db = Database(self.db_path)
+        logger.info(f"Bot initialized with token: {self.bot_token[:10]}...")
         
         # Admin IDs from environment variable (comma-separated)
         self.admin_ids = set()
@@ -475,24 +488,24 @@ class MultipurposeBot:
                 
         return None
     
-    def add_handlers(self, application):
+    def add_handlers(self):
         """Add all command and message handlers to the application."""
         # Command handlers
-        application.add_handler(CommandHandler('start', self.start))
-        application.add_handler(CommandHandler('help', self.help_command))
-        application.add_handler(CommandHandler('stats', self.show_stats))
-        application.add_handler(CommandHandler('referral', self.referral_info))
+        self.app.add_handler(CommandHandler("start", self.start))
+        self.app.add_handler(CommandHandler("help", self.help_command))
+        self.app.add_handler(CommandHandler("stats", self.show_stats))
+        self.app.add_handler(CommandHandler("referral", self.referral_info))
         
         # Admin commands
-        application.add_handler(CommandHandler('warn', self.warn_user))
-        application.add_handler(CommandHandler('ban', self.ban_user))
+        self.app.add_handler(CommandHandler("warn", self.warn_user))
+        self.app.add_handler(CommandHandler("ban", self.ban_user))
         
         # Message handler for tracking activity
-        application.add_handler(MessageHandler(
+        self.app.add_handler(MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             self._handle_message
         ))
-    
+
     async def _handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle all non-command messages to track activity."""
         user = update.effective_user
@@ -541,7 +554,4 @@ class MultipurposeBot:
 
 if __name__ == '__main__':
     bot = MultipurposeBot()
-    application = Application.builder().token(bot.bot_token).build()
-    bot.app = application
-    bot.add_handlers(application)
     bot.run()
