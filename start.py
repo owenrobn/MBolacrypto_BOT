@@ -83,6 +83,7 @@ def main():
         logger.info("Starting bot...")
         bot_instance = MultipurposeBot()
         
+        webhook_url = None
         # Set up webhook if running on Render
         if 'RENDER' in os.environ:
             webhook_url = os.environ.get('WEBHOOK_URL')
@@ -94,8 +95,11 @@ def main():
         import atexit
         atexit.register(cleanup)
         
-        # Start the bot
-        bot_instance.run()
+        # Start the bot (webhook mode if URL provided, else polling)
+        if webhook_url:
+            bot_instance.run(webhook_url)
+        else:
+            bot_instance.run()
         
     except Exception as e:
         logger.critical(f"Failed to start bot: {e}", exc_info=True)
