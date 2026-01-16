@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: ref-contest-bot
+    env: python
+    pythonVersion: 3.12.3
+    plan: free
+    buildCommand: "pip install --upgrade --force-reinstall --no-cache-dir -r requirements.txt"
+    startCommand: "python start.py"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: BOT_USERNAME
+        sync: false
+      - key: DB_PATH
+        value: /data/contest.db
+      # Provide your public service URL here for Telegram webhook
+      # Example after first deploy: https://ref-contest-bot.onrender.com
+      - key: WEBHOOK_URL
+        sync: false
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
